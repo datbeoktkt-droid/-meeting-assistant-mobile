@@ -163,6 +163,13 @@ class _HomePageState extends State<_HomePage> {
                 ),
               ),
               const SizedBox(height: 14),
+              if (data.activeSession != null) ...[
+                _ActiveSessionCard(
+                  activeSession: data.activeSession!,
+                  onOpenMenu: widget.onOpenMenu,
+                ),
+                const SizedBox(height: 14),
+              ],
               Row(
                 children: [
                   Expanded(
@@ -420,6 +427,161 @@ class _HomePageState extends State<_HomePage> {
           ),
         );
       },
+    );
+  }
+}
+
+class _ActiveSessionCard extends StatelessWidget {
+  const _ActiveSessionCard({
+    required this.activeSession,
+    required this.onOpenMenu,
+  });
+
+  final ActiveSessionData activeSession;
+  final VoidCallback onOpenMenu;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF101C25),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: const Color(0xFF22313A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Ban hien tai dang choi',
+                  style: TextStyle(
+                    color: Color(0xFF9EF9B7),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
+              Container(
+                width: 8,
+                height: 8,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF0CC38C),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Ban ${activeSession.tableNumber.toString().padLeft(2, '0')}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            formatCurrency(activeSession.estimatedTotal),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 32,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${activeSession.minutes} phut | Giam gia ${activeSession.discountPct.toStringAsFixed(0)}%',
+            style: const TextStyle(color: Color(0xFF9AA9B0)),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _SessionInfoChip(
+                  label: 'Trang thai',
+                  value: 'Dang choi',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _SessionInfoChip(
+                  label: 'Tam tinh',
+                  value: formatCurrency(activeSession.estimatedTotal),
+                  highlight: true,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: onOpenMenu,
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF9EF9B7),
+                foregroundColor: const Color(0xFF153126),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
+              child: const Text(
+                'Xem thuc don / Goi mon',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SessionInfoChip extends StatelessWidget {
+  const _SessionInfoChip({
+    required this.label,
+    required this.value,
+    this.highlight = false,
+  });
+
+  final String label;
+  final String value;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151F27),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF90A0A8),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: TextStyle(
+              color: highlight ? const Color(0xFF9EF9B7) : Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

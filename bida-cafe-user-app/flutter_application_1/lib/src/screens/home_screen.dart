@@ -218,10 +218,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 borderRadius: BorderRadius.circular(18),
               ),
               child: const Icon(
-                Icons.notifications_none,
+                Icons.account_circle_outlined,
                 color: Color(0xFF9EF9B7),
               ),
             ),
+            tooltip: 'Tai khoan',
             onSelected: (value) async {
               if (value == 'profile') {
                 await _openProfilePage();
@@ -246,11 +247,35 @@ class _HomeScreenState extends State<HomeScreen> {
               }
             },
             itemBuilder: (context) => const [
-              PopupMenuItem(value: 'profile', child: Text('Ho so')),
-              PopupMenuItem(value: 'history', child: Text('Lich su')),
-              PopupMenuItem(value: 'rewards', child: Text('Thanh vien')),
+              PopupMenuItem(
+                value: 'profile',
+                child: Text(
+                  'Ho so',
+                  style: TextStyle(color: Color(0xFFF4FBF7)),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'history',
+                child: Text(
+                  'Lich su',
+                  style: TextStyle(color: Color(0xFFF4FBF7)),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'rewards',
+                child: Text(
+                  'Thanh vien',
+                  style: TextStyle(color: Color(0xFFF4FBF7)),
+                ),
+              ),
               PopupMenuDivider(),
-              PopupMenuItem(value: 'logout', child: Text('Dang xuat')),
+              PopupMenuItem(
+                value: 'logout',
+                child: Text(
+                  'Dang xuat',
+                  style: TextStyle(color: Color(0xFFFFB0B0)),
+                ),
+              ),
             ],
           ),
         ],

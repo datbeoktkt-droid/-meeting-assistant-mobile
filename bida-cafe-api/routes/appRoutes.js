@@ -29,6 +29,20 @@ function sanitizeUser(user) {
 function createAppRouter({ pool, notificationHub }) {
   const router = express.Router();
 
+  // [LENH CHOT]: GOI NHAN VIEN - KHONG CAN AUTH DE TRANH LOI 404
+  router.post('/request-staff-checkout', async (req, res) => {
+    console.log('[DEBUG] Server nhan duoc tin hieu GOI NHAN VIEN');
+    const { tableNumber, userName } = req.body;
+    console.log('[DEBUG] --- BAT DAU GUI TIN NHAN DEN ADMIN ---');
+    notificationHub.broadcast('checkout:requested', {
+      table_number: tableNumber || '?',
+      user_name: userName || 'Khach hang',
+      at: new Date()
+    });
+    console.log('[DEBUG] --- DA GUI TIN NHAN XONG ---');
+    res.json({ success: true });
+  });
+
   router.post('/auth/register', async (req, res) => {
     const { phone, fullName = null, pin, avatarUrl = null } = req.body;
     const client = await pool.connect();
@@ -68,6 +82,7 @@ function createAppRouter({ pool, notificationHub }) {
   });
 
   router.post('/auth/login', async (req, res) => {
+    console.log('[TEST] CO NGUOI DANG NHAP');
     const { phone, pin, deviceName = null } = req.body;
 
     try {
@@ -513,17 +528,53 @@ function createAppRouter({ pool, notificationHub }) {
 
   router.get('/history', requireUserAuth, async (req, res) => {
     try {
-      const result = await pool.query(
-        `SELECT order_id, session_id, total_amount, order_type, status, created_at
-         FROM public.orders
-         WHERE user_id = $1
-         ORDER BY created_at DESC`,
+      const sessionsResult = await pool.query(
+        `SELECT session_id, total_amount AS billiard_total, end_time AS created_at
+         FROM public.billiard_sessions
+         WHERE user_id = $1 AND status = 'COMPLETED'`,
         [req.userAuth.user_id]
       );
-      res.json(result.rows.map((row) => ({
-        ...row,
-        total_amount: toNumber(row.total_amount),
-      })));
+
+      const ordersResult = await pool.query(
+        `SELECT order_id, session_id, total_amount, order_type, status, created_at
+         FROM public.orders
+         WHERE user_id = $1`,
+        [req.userAuth.user_id]
+      );
+
+      const history = [];
+
+      for (const o of ordersResult.rows) {
+        if (!o.session_id) {
+          history.push({
+            order_id: o.order_id,
+            session_id: null,
+            total_amount: toNumber(o.total_amount),
+            order_type: o.order_type,
+            status: o.status,
+            created_at: o.created_at
+          });
+        }
+      }
+
+      for (const s of sessionsResult.rows) {
+        const sessionOrders = ordersResult.rows.filter(o => o.session_id === s.session_id);
+        const cafeTotal = sessionOrders.reduce((sum, o) => sum + toNumber(o.total_amount), 0);
+        const grandTotal = toNumber(s.billiard_total) + cafeTotal;
+        
+        history.push({
+          order_id: -s.session_id,
+          session_id: s.session_id,
+          total_amount: grandTotal,
+          order_type: 'BILLIARD',
+          status: 'DONE',
+          created_at: s.created_at
+        });
+      }
+
+      history.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      res.json(history);
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
@@ -531,38 +582,97 @@ function createAppRouter({ pool, notificationHub }) {
 
   router.get('/history/:orderId', requireUserAuth, async (req, res) => {
     try {
-      const orderResult = await pool.query(
-        `SELECT order_id, user_id, session_id, total_amount, order_type, status, created_at
-         FROM public.orders
-         WHERE order_id = $1 AND user_id = $2`,
-        [req.params.orderId, req.userAuth.user_id]
-      );
+      const orderId = parseInt(req.params.orderId, 10);
+      
+      if (orderId < 0) {
+        const sessionId = -orderId;
+        const sessionResult = await pool.query(
+          `SELECT session_id, total_amount, start_time, end_time, status
+           FROM public.billiard_sessions
+           WHERE session_id = $1 AND user_id = $2`,
+          [sessionId, req.userAuth.user_id]
+        );
+        
+        if (sessionResult.rowCount === 0) throw new Error('Khong tim thay hoa don');
+        const session = sessionResult.rows[0];
+        
+        const cafeDetailsResult = await pool.query(
+          `SELECT od.detail_id, od.product_id, p.product_name, od.quantity, od.unit_price
+           FROM public.order_details od
+           JOIN public.products p ON p.product_id = od.product_id
+           JOIN public.orders o ON o.order_id = od.order_id
+           WHERE o.session_id = $1`,
+          [sessionId]
+        );
 
-      if (orderResult.rowCount === 0) {
-        throw new Error('Khong tim thay don hang');
-      }
+        let items = [];
+        const billiardTotal = toNumber(session.total_amount);
+        
+        items.push({
+          detail_id: -1,
+          product_id: 0,
+          product_name: 'Tiền giờ chơi Bida',
+          quantity: 1,
+          unit_price: billiardTotal,
+          line_total: billiardTotal
+        });
 
-      const detailResult = await pool.query(
-        `SELECT od.detail_id, od.product_id, p.product_name, od.quantity, od.unit_price
-         FROM public.order_details od
-         JOIN public.products p ON p.product_id = od.product_id
-         WHERE od.order_id = $1
-         ORDER BY od.detail_id ASC`,
-        [req.params.orderId]
-      );
-
-      res.json({
-        ...orderResult.rows[0],
-        total_amount: toNumber(orderResult.rows[0].total_amount),
-        items: detailResult.rows.map((row) => ({
+        const cafeItems = cafeDetailsResult.rows.map((row) => ({
           detail_id: row.detail_id,
           product_id: row.product_id,
           product_name: row.product_name,
           quantity: toNumber(row.quantity),
           unit_price: toNumber(row.unit_price),
           line_total: Math.round(toNumber(row.quantity) * toNumber(row.unit_price)),
-        })),
-      });
+        }));
+        
+        items = items.concat(cafeItems);
+        const grandTotal = items.reduce((sum, item) => sum + item.line_total, 0);
+
+        res.json({
+          order_id: orderId,
+          user_id: req.userAuth.user_id,
+          session_id: sessionId,
+          total_amount: grandTotal,
+          order_type: 'BILLIARD',
+          status: 'DONE',
+          created_at: session.end_time,
+          items: items
+        });
+      } else {
+        const orderResult = await pool.query(
+          `SELECT order_id, user_id, session_id, total_amount, order_type, status, created_at
+           FROM public.orders
+           WHERE order_id = $1 AND user_id = $2`,
+          [orderId, req.userAuth.user_id]
+        );
+
+        if (orderResult.rowCount === 0) {
+          throw new Error('Khong tim thay don hang');
+        }
+
+        const detailResult = await pool.query(
+          `SELECT od.detail_id, od.product_id, p.product_name, od.quantity, od.unit_price
+           FROM public.order_details od
+           JOIN public.products p ON p.product_id = od.product_id
+           WHERE od.order_id = $1
+           ORDER BY od.detail_id ASC`,
+          [orderId]
+        );
+
+        res.json({
+          ...orderResult.rows[0],
+          total_amount: toNumber(orderResult.rows[0].total_amount),
+          items: detailResult.rows.map((row) => ({
+            detail_id: row.detail_id,
+            product_id: row.product_id,
+            product_name: row.product_name,
+            quantity: toNumber(row.quantity),
+            unit_price: toNumber(row.unit_price),
+            line_total: Math.round(toNumber(row.quantity) * toNumber(row.unit_price)),
+          })),
+        });
+      }
     } catch (error) {
       res.status(404).json({ error: error.message });
     }
@@ -575,7 +685,7 @@ function createAppRouter({ pool, notificationHub }) {
         `SELECT s.session_id, s.table_id, s.start_time, s.status, bt.table_number, bt.is_vip
          FROM public.billiard_sessions s
          JOIN public.billiard_tables bt ON bt.table_id = s.table_id
-         WHERE s.user_id = $1 AND s.status = 'ACTIVE'
+         WHERE s.user_id = $1 AND s.status = 'ACTIVE' AND bt.status = 'OCCUPIED'
          ORDER BY s.start_time DESC
          LIMIT 1`,
         [req.userAuth.user_id]
@@ -589,10 +699,43 @@ function createAppRouter({ pool, notificationHub }) {
       const member = await getUserMembership(client, req.userAuth.user_id);
       const pricePerHour = await getCurrentPricePerHour(client);
       const minutes = Math.ceil((Date.now() - new Date(session.start_time).getTime()) / 60000);
-      const subtotal = Math.round((minutes / 60) * pricePerHour);
+      const billiardSubtotal = Math.round((minutes / 60) * pricePerHour);
       const discountPct = toNumber(member.discount_billiard_pct);
-      const discountAmount = calculateDiscountAmount(subtotal, discountPct);
-      const estimatedTotal = subtotal - discountAmount;
+      const billiardDiscountAmount = calculateDiscountAmount(billiardSubtotal, discountPct);
+      const billiardTotal = billiardSubtotal - billiardDiscountAmount;
+
+      const ordersResult = await client.query(
+        `SELECT o.order_id, o.total_amount, o.created_at, o.status,
+                COALESCE(SUM(od.quantity * od.unit_price), 0) as calculated_subtotal,
+                json_agg(json_build_object(
+                  'product_name', p.product_name,
+                  'quantity', od.quantity,
+                  'unit_price', od.unit_price,
+                  'line_total', (od.quantity * od.unit_price)
+                )) FILTER (WHERE od.detail_id IS NOT NULL) as items
+         FROM public.orders o
+         LEFT JOIN public.order_details od ON od.order_id = o.order_id
+         LEFT JOIN public.products p ON p.product_id = od.product_id
+         WHERE o.session_id = $1 AND o.status != 'CANCELLED'
+         GROUP BY o.order_id, o.total_amount, o.created_at, o.status
+         ORDER BY o.created_at ASC`,
+        [session.session_id]
+      );
+
+      const cafeItems = ordersResult.rows.map(row => ({
+        order_id: row.order_id,
+        subtotal: toNumber(row.calculated_subtotal),
+        total: toNumber(row.total_amount),
+        status: row.status,
+        created_at: row.created_at,
+        items: row.items || []
+      }));
+
+      // Only sum items that are NOT DONE and NOT CANCELLED for the final grandTotal
+      const cafeTotal = cafeItems
+        .filter(item => item.status !== 'DONE' && item.status !== 'CANCELLED')
+        .reduce((sum, item) => sum + item.total, 0);
+      const grandTotal = billiardTotal + cafeTotal;
 
       res.json({
         active_session: {
@@ -602,15 +745,162 @@ function createAppRouter({ pool, notificationHub }) {
           is_vip: session.is_vip,
           start_time: session.start_time,
           status: session.status,
-          minutes,
-          subtotal,
-          discount_pct: discountPct,
-          discount_amount: discountAmount,
-          estimated_total: estimatedTotal,
+          minutes: Number(minutes),
+          price_per_hour: Number(pricePerHour),
+          // Send multiple variants of keys to be 100% sure the app catches it
+          billiard_subtotal: Number(billiardSubtotal),
+          subtotal_billiard: Number(billiardSubtotal),
+          billiardSubtotal: Number(billiardSubtotal),
+          
+          discount_pct: Number(discountPct),
+          discount_amount: Number(billiardDiscountAmount),
+          billiard_discount: Number(billiardDiscountAmount),
+          
+          billiard_total: Number(billiardTotal),
+          total_billiard: Number(billiardTotal),
+          
+          cafe_items: cafeItems || [],
+          cafe_total: Number(cafeTotal),
+          
+          estimated_total: Number(grandTotal),
+          grand_total: Number(grandTotal),
+          total_amount: Number(grandTotal)
         },
       });
     } catch (error) {
       res.status(400).json({ error: error.message });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post('/sessions/active/checkout', requireUserAuth, async (req, res) => {
+    const { paymentMethod = 'WALLET' } = req.body;
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const sessionResult = await client.query(
+        `SELECT s.session_id, s.table_id, s.start_time
+         FROM public.billiard_sessions s
+         JOIN public.billiard_tables bt ON bt.table_id = s.table_id
+         WHERE s.user_id = $1 AND s.status = 'ACTIVE' AND bt.status = 'OCCUPIED'
+         LIMIT 1`,
+        [req.userAuth.user_id]
+      );
+
+      if (sessionResult.rowCount === 0) {
+        throw new Error('Khong tim thay phien choi dang hoat dong');
+      }
+
+      const { session_id: sessionId, table_id: tableId, start_time: startTime } = sessionResult.rows[0];
+      const member = await getUserMembership(client, req.userAuth.user_id);
+      const pricePerHour = await getCurrentPricePerHour(client);
+      const diffMs = new Date() - new Date(startTime);
+      const minutes = Math.ceil(diffMs / 60000);
+      const billiardSubtotal = Math.round((minutes / 60) * pricePerHour);
+      const discountPct = toNumber(member.discount_billiard_pct);
+      const discountAmount = calculateDiscountAmount(billiardSubtotal, discountPct);
+      const billiardTotal = billiardSubtotal - discountAmount;
+
+      const ordersResult = await client.query(
+        `SELECT o.order_id, o.total_amount, 
+                COALESCE(SUM(od.quantity * od.unit_price), 0) as subtotal
+         FROM public.orders o
+         LEFT JOIN public.order_details od ON od.order_id = o.order_id
+         WHERE o.session_id = $1 AND o.status = 'PENDING_PAYMENT'
+         GROUP BY o.order_id, o.total_amount`,
+        [sessionId]
+      );
+      
+      const cafeTotal = ordersResult.rows.reduce((sum, row) => sum + toNumber(row.total_amount), 0);
+      const cafeSubtotal = ordersResult.rows.reduce((sum, row) => sum + toNumber(row.subtotal), 0);
+      const cafeDiscountAmount = Math.max(0, cafeSubtotal - cafeTotal);
+      
+      const grandTotal = billiardTotal + cafeTotal;
+
+      let newWalletBalance = null;
+
+      if (paymentMethod === 'WALLET') {
+        const walletResult = await client.query(
+          `UPDATE public.users
+           SET wallet_balance = wallet_balance - $1::numeric
+           WHERE user_id = $2 AND wallet_balance >= $1::numeric
+           RETURNING wallet_balance`,
+          [grandTotal, req.userAuth.user_id]
+        );
+
+        if (walletResult.rowCount === 0) {
+          throw new Error('Vi khong du tien de thanh toan ban va do uong');
+        }
+        newWalletBalance = walletResult.rows[0].wallet_balance;
+      }
+
+      await client.query(
+        'UPDATE public.billiard_sessions SET end_time = NOW(), total_amount = $1::numeric, status = $2 WHERE session_id = $3',
+        [billiardTotal, 'COMPLETED', sessionId]
+      );
+      await client.query(
+        'UPDATE public.billiard_tables SET status = $1 WHERE table_id = $2',
+        ['CLEANING', tableId]
+      );
+      await client.query(
+        `UPDATE public.table_bookings
+         SET status = 'COMPLETED'
+         WHERE table_id = $1 AND status = 'CHECKED_IN'`,
+        [tableId]
+      );
+
+      await client.query(
+        `UPDATE public.orders
+         SET status = 'DONE'
+         WHERE session_id = $1
+           AND order_type = 'CAFE'
+           AND status != 'DONE'
+           AND status != 'CANCELLED'`,
+        [sessionId]
+      );
+
+      await client.query('COMMIT');
+
+      notificationHub.broadcast('session:completed', {
+        session_id: sessionId,
+        table_id: tableId,
+        user_id: req.userAuth.user_id,
+        total_minutes: minutes,
+        billiard_total: billiardTotal,
+        cafe_total: cafeTotal,
+        grand_total: grandTotal,
+        payment_method: paymentMethod
+      });
+      notificationHub.broadcast('table:cleaning', {
+        table_id: Number(tableId),
+        status: 'CLEANING',
+      });
+
+      res.json({
+        success: true,
+        rank: member.rank_name,
+        billiard: {
+          minutes,
+          subtotal: billiardSubtotal,
+          discount_pct: discountPct,
+          discount_amount: discountAmount,
+          total: billiardTotal,
+        },
+        cafe: {
+          subtotal: cafeSubtotal,
+          discount_amount: cafeDiscountAmount,
+          total: cafeTotal,
+        },
+        grand_total: grandTotal,
+        payment_method: paymentMethod,
+        balance: newWalletBalance,
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      res.status(400).json({ error: err.message });
     } finally {
       client.release();
     }
@@ -799,7 +1089,7 @@ function createAppRouter({ pool, notificationHub }) {
   });
 
   router.post('/orders', requireUserAuth, async (req, res) => {
-    const { productId, quantity, paymentMethod = 'CASH' } = req.body;
+    const { productId, quantity, paymentMethod = 'CASH', tableId = null } = req.body;
     const client = await pool.connect();
 
     try {
@@ -824,22 +1114,41 @@ function createAppRouter({ pool, notificationHub }) {
       const discountAmount = calculateDiscountAmount(subtotal, discountPct);
       const total = subtotal - discountAmount;
       const normalizedPaymentMethod = String(paymentMethod).toUpperCase();
+      
+      let sessionId = null;
+      let orderStatus = 'DONE';
       let balance = null;
-      let orderStatus = 'PENDING_PAYMENT';
 
-      if (normalizedPaymentMethod === 'WALLET') {
-        const walletResult = await client.query(
-          `UPDATE public.users
-           SET wallet_balance = wallet_balance - $1::numeric
-           WHERE user_id = $2 AND wallet_balance >= $1::numeric
-           RETURNING wallet_balance`,
-          [total, req.userAuth.user_id]
+      if (tableId) {
+        const sessionResult = await client.query(
+          `SELECT session_id FROM public.billiard_sessions
+           WHERE table_id = $1 AND status = 'ACTIVE' LIMIT 1`,
+          [tableId]
         );
-        if (walletResult.rowCount === 0) {
-          throw new Error('Vi khong du tien');
+        if (sessionResult.rowCount > 0) {
+          sessionId = sessionResult.rows[0].session_id;
+          // All orders during session are PENDING_PAYMENT to be settled at checkout
+          orderStatus = 'PENDING_PAYMENT';
         }
-        balance = toNumber(walletResult.rows[0].wallet_balance);
-        orderStatus = 'DONE';
+      }
+
+      // Individual payment processing only for walk-in orders (no session)
+      if (orderStatus === 'DONE' && !sessionId) {
+        if (normalizedPaymentMethod === 'WALLET') {
+          const walletResult = await client.query(
+            `UPDATE public.users
+             SET wallet_balance = wallet_balance - $1::numeric
+             WHERE user_id = $2 AND wallet_balance >= $1::numeric
+             RETURNING wallet_balance`,
+            [total, req.userAuth.user_id]
+          );
+          if (walletResult.rowCount === 0) {
+            throw new Error('Vi khong du tien');
+          }
+          balance = toNumber(walletResult.rows[0].wallet_balance);
+        } else {
+          orderStatus = 'PENDING_PAYMENT';
+        }
       }
 
       await client.query(
@@ -851,10 +1160,10 @@ function createAppRouter({ pool, notificationHub }) {
       );
 
       const orderResult = await client.query(
-        `INSERT INTO public.orders (user_id, total_amount, order_type, status)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO public.orders (user_id, session_id, total_amount, order_type, status)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING order_id`,
-        [req.userAuth.user_id, total, 'CAFE', orderStatus]
+        [req.userAuth.user_id, sessionId, total, 'CAFE', orderStatus]
       );
 
       await client.query(

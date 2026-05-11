@@ -19,7 +19,7 @@ function createCoreRouter({ pool, notificationHub }) {
   });
 
   router.post('/order', async (req, res) => {
-    const { userId, productId, quantity } = req.body;
+    const { userId, productId, quantity, tableId } = req.body;
     const client = await pool.connect();
 
     try {
@@ -45,16 +45,36 @@ function createCoreRouter({ pool, notificationHub }) {
       const discountAmount = calculateDiscountAmount(subtotal, discountPct);
       const total = subtotal - discountAmount;
 
-      const walletResult = await client.query(
-        `UPDATE public.users
-         SET wallet_balance = wallet_balance - $1::numeric
-         WHERE user_id = $2 AND wallet_balance >= $1::numeric
-         RETURNING wallet_balance`,
-        [total, userId]
-      );
+      let sessionId = null;
+      let orderStatus = 'DONE';
 
-      if (walletResult.rowCount === 0) {
-        throw new Error('Vi khong du tien');
+      if (tableId) {
+        const sessionResult = await client.query(
+          `SELECT session_id FROM public.billiard_sessions
+           WHERE table_id = $1 AND status = 'ACTIVE' LIMIT 1`,
+          [tableId]
+        );
+        if (sessionResult.rowCount > 0) {
+          sessionId = sessionResult.rows[0].session_id;
+          orderStatus = 'PENDING_PAYMENT';
+        }
+      }
+
+      let newWalletBalance = null;
+
+      if (orderStatus === 'DONE') {
+        const walletResult = await client.query(
+          `UPDATE public.users
+           SET wallet_balance = wallet_balance - $1::numeric
+           WHERE user_id = $2 AND wallet_balance >= $1::numeric
+           RETURNING wallet_balance`,
+          [total, userId]
+        );
+
+        if (walletResult.rowCount === 0) {
+          throw new Error('Vi khong du tien');
+        }
+        newWalletBalance = walletResult.rows[0].wallet_balance;
       }
 
       await client.query(
@@ -66,10 +86,10 @@ function createCoreRouter({ pool, notificationHub }) {
       );
 
       const orderResult = await client.query(
-        `INSERT INTO public.orders (user_id, total_amount, order_type, status)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO public.orders (user_id, session_id, total_amount, order_type, status)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING order_id`,
-        [userId, total, 'CAFE', 'DONE']
+        [userId, sessionId, total, 'CAFE', orderStatus]
       );
 
       await client.query(
@@ -120,7 +140,8 @@ function createCoreRouter({ pool, notificationHub }) {
         subtotal,
         discount_amount: discountAmount,
         final_total: total,
-        balance: walletResult.rows[0].wallet_balance,
+        balance: newWalletBalance,
+        status: orderStatus,
       });
     } catch (err) {
       await client.query('ROLLBACK');
@@ -230,8 +251,65 @@ function createCoreRouter({ pool, notificationHub }) {
     }
   });
 
+  router.get('/table/:tableId/invoice-preview', async (req, res) => {
+    const { tableId } = req.params;
+    try {
+      const sessionResult = await pool.query(
+        `SELECT s.session_id, s.user_id, s.start_time
+         FROM public.billiard_sessions s
+         WHERE s.table_id = $1 AND s.status = 'ACTIVE'
+         LIMIT 1`,
+        [tableId]
+      );
+
+      if (sessionResult.rowCount === 0) {
+        return res.json({ active: false, message: 'Khong co phien choi nao dang hoat dong' });
+      }
+
+      const { session_id: sessionId, user_id: userId, start_time: startTime } = sessionResult.rows[0];
+      const member = await getUserMembership(pool, userId);
+      const pricePerHour = await getCurrentPricePerHour(pool);
+      const diffMs = new Date() - new Date(startTime);
+      const minutes = Math.ceil(diffMs / 60000);
+      const billiardSubtotal = Math.round((minutes / 60) * pricePerHour);
+      const discountBilliardPct = toNumber(member.discount_billiard_pct);
+      const discountBilliardAmount = calculateDiscountAmount(billiardSubtotal, discountBilliardPct);
+      const billiardTotal = billiardSubtotal - discountBilliardAmount;
+
+      const ordersResult = await pool.query(
+        `SELECT SUM(total_amount) as cafe_total, COUNT(*) as orders_count FROM public.orders
+         WHERE session_id = $1 AND status = 'PENDING_PAYMENT'`,
+        [sessionId]
+      );
+      
+      const cafeTotal = toNumber(ordersResult.rows[0].cafe_total) || 0;
+      const grandTotal = billiardTotal + cafeTotal;
+
+      res.json({
+        active: true,
+        session_id: sessionId,
+        user_id: userId,
+        billiard: {
+          minutes,
+          price_per_hour: pricePerHour,
+          subtotal: billiardSubtotal,
+          discount_pct: discountBilliardPct,
+          discount_amount: discountBilliardAmount,
+          total: billiardTotal
+        },
+        cafe: {
+          total: cafeTotal,
+          orders_count: toNumber(ordersResult.rows[0].orders_count) || 0
+        },
+        grand_total: grandTotal
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   router.post('/table/end', requireAuth, requireRoles('ADMIN', 'STAFF', 'BARISTA'), async (req, res) => {
-    const { tableId } = req.body;
+    const { tableId, paymentMethod = 'WALLET' } = req.body;
     const client = await pool.connect();
 
     try {
@@ -254,78 +332,96 @@ function createCoreRouter({ pool, notificationHub }) {
       const pricePerHour = await getCurrentPricePerHour(client);
       const diffMs = new Date() - new Date(startTime);
       const minutes = Math.ceil(diffMs / 60000);
-      const subtotal = Math.round((minutes / 60) * pricePerHour);
+      const billiardSubtotal = Math.round((minutes / 60) * pricePerHour);
       const discountPct = toNumber(member.discount_billiard_pct);
-      const discountAmount = calculateDiscountAmount(subtotal, discountPct);
-      const total = subtotal - discountAmount;
+      const discountAmount = calculateDiscountAmount(billiardSubtotal, discountPct);
+      const billiardTotal = billiardSubtotal - discountAmount;
 
-      const walletResult = await client.query(
-        `UPDATE public.users
-         SET wallet_balance = wallet_balance - $1::numeric
-         WHERE user_id = $2 AND wallet_balance >= $1::numeric
-         RETURNING wallet_balance`,
-        [total, userId]
+      const ordersResult = await client.query(
+        `SELECT SUM(total_amount) as cafe_total FROM public.orders
+         WHERE session_id = $1 AND status = 'PENDING_PAYMENT'`,
+        [sessionId]
       );
+      const cafeTotal = toNumber(ordersResult.rows[0].cafe_total) || 0;
+      const grandTotal = billiardTotal + cafeTotal;
 
-      if (walletResult.rowCount === 0) {
-        throw new Error('Vi khong du tien de thanh toan ban');
+      let newWalletBalance = null;
+
+      if (paymentMethod === 'WALLET') {
+        const walletResult = await client.query(
+          `UPDATE public.users
+           SET wallet_balance = wallet_balance - $1::numeric
+           WHERE user_id = $2 AND wallet_balance >= $1::numeric
+           RETURNING wallet_balance`,
+          [grandTotal, userId]
+        );
+
+        if (walletResult.rowCount === 0) {
+          throw new Error('Vi khong du tien de thanh toan ban va do uong');
+        }
+        newWalletBalance = walletResult.rows[0].wallet_balance;
       }
 
-        await client.query(
-          'UPDATE public.billiard_sessions SET end_time = NOW(), total_amount = $1::numeric, status = $2 WHERE session_id = $3',
-          [total, 'COMPLETED', sessionId]
-        );
-        await client.query(
-          'UPDATE public.billiard_tables SET status = $1 WHERE table_id = $2',
-          ['CLEANING', tableId]
-        );
-        await client.query(
-          `UPDATE public.table_bookings
-           SET status = 'COMPLETED'
-           WHERE table_id = $1 AND status = 'CHECKED_IN'`,
-          [tableId]
-        );
+      await client.query(
+        'UPDATE public.billiard_sessions SET end_time = NOW(), total_amount = $1::numeric, status = $2 WHERE session_id = $3',
+        [billiardTotal, 'COMPLETED', sessionId]
+      );
+      await client.query(
+        'UPDATE public.billiard_tables SET status = $1 WHERE table_id = $2',
+        ['CLEANING', tableId]
+      );
+      await client.query(
+        `UPDATE public.table_bookings
+         SET status = 'COMPLETED'
+         WHERE table_id = $1 AND status = 'CHECKED_IN'`,
+        [tableId]
+      );
 
-        await client.query(
-          `UPDATE public.orders
-           SET status = 'DONE'
-           WHERE user_id = $1
-             AND order_type = 'CAFE'
-             AND status = 'PENDING_PAYMENT'
-             AND created_at >= $2`,
-          [userId, startTime]
-        );
+      await client.query(
+        `UPDATE public.orders
+         SET status = 'DONE'
+         WHERE session_id = $1
+           AND order_type = 'CAFE'
+           AND status = 'PENDING_PAYMENT'`,
+        [sessionId]
+      );
 
-        await client.query('COMMIT');
+      await client.query('COMMIT');
 
       await writeActivityLog(pool, {
         staffId: req.auth.staff_id,
         actionType: 'TABLE_END',
-        description: `Dong ban ${tableId}, session ${sessionId}`,
+        description: `Dong ban ${tableId}, session ${sessionId}. Thanh toan: ${paymentMethod}, Tong: ${grandTotal}`,
         ipAddress: req.ip,
       });
 
-        notificationHub.broadcast('session:completed', {
-          session_id: sessionId,
-          table_id: tableId,
-          user_id: userId,
-          total_minutes: minutes,
-          total_price: total,
-        });
-        notificationHub.broadcast('table:cleaning', {
-          table_id: Number(tableId),
-          status: 'CLEANING',
-        });
+      notificationHub.broadcast('session:completed', {
+        session_id: sessionId,
+        table_id: tableId,
+        user_id: userId,
+        total_minutes: minutes,
+        billiard_total: billiardTotal,
+        cafe_total: cafeTotal,
+        grand_total: grandTotal,
+        payment_method: paymentMethod
+      });
+      notificationHub.broadcast('table:cleaning', {
+        table_id: Number(tableId),
+        status: 'CLEANING',
+      });
 
-        res.json({
-          success: true,
+      res.json({
+        success: true,
         rank: member.rank_name,
         discount_pct: discountPct,
         total_minutes: minutes,
-        subtotal,
+        billiard_subtotal: billiardSubtotal,
         discount_amount: discountAmount,
-        total_price: total,
-        balance: walletResult.rows[0].wallet_balance,
+        billiard_total: billiardTotal,
+        cafe_total: cafeTotal,
+        grand_total: grandTotal,
+        payment_method: paymentMethod,
+        balance: newWalletBalance,
       });
     } catch (err) {
       await client.query('ROLLBACK');

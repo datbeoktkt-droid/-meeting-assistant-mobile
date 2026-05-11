@@ -29,7 +29,8 @@ class NotificationHub {
   }
 
   broadcast(event, payload) {
-    const body = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+    const body = `data: ${JSON.stringify({ type: event, data: payload })}\n\n`;
+    console.log(`[DEBUG] Broadcasting event "${event}" to ${this.clients.size} clients`);
 
     for (const [clientId, client] of this.clients.entries()) {
       try {

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import ProductsPanel from './ProductsPanel';
 import {
   api,
   clearAuth,
@@ -10,11 +11,33 @@ import {
 } from './api';
 
 const TABS = [
-  { id: 'dashboard', label: 'Tong quan' },
-  { id: 'tables', label: 'Ban bida' },
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'tables', label: 'Thanh toan' },
+  { id: 'members', label: 'Khach hang' },
   { id: 'bookings', label: 'Dat ban' },
+  { id: 'kitchen', label: 'Bep / Pha che' },
   { id: 'topups', label: 'Nap tien' },
-  { id: 'members', label: 'Thanh vien' },
+  { id: 'products', label: 'San pham' },
+];
+
+const NAV_GROUPS = [
+  {
+    label: 'Chung',
+    items: [
+      { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+      { id: 'tables', label: 'Thanh toan', icon: 'payments' },
+      { id: 'members', label: 'Khach hang', icon: 'group' },
+      { id: 'bookings', label: 'Dat ban', icon: 'event_seat' },
+    ],
+  },
+  {
+    label: 'Cong cu',
+    items: [
+      { id: 'kitchen', label: 'Bep / Pha che', icon: 'local_cafe' },
+      { id: 'topups', label: 'Nap tien', icon: 'receipt_long' },
+      { id: 'products', label: 'San pham', icon: 'inventory_2' },
+    ],
+  },
 ];
 
 const TABLE_STATUS_LABELS = {
@@ -33,6 +56,24 @@ const BOOKING_STATUS_LABELS = {
   EXPIRED: 'Het han',
 };
 
+const KITCHEN_STATUS_LABELS = {
+  PENDING: 'Cho nhan mon',
+  PREPARING: 'Dang lam',
+  DONE: 'Da xong',
+  SERVED: 'Da phuc vu',
+};
+
+function resolveTabFromPathname(pathname) {
+  const normalized = String(pathname || '/').replace(/\/+$/, '') || '/';
+  if (normalized === '/' || normalized === '') return 'dashboard';
+  const tab = normalized.replace(/^\//, '');
+  return TABS.some((item) => item.id === tab) ? tab : 'dashboard';
+}
+
+function getPathForTab(tab) {
+  return tab === 'dashboard' ? '/' : `/${tab}`;
+}
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -44,6 +85,122 @@ function formatMoney(value) {
 function formatDateTime(value) {
   if (!value) return '--';
   return new Date(value).toLocaleString('vi-VN');
+}
+
+function buildTransferQrUrl(summary, receiver) {
+  if (!receiver || !receiver.bank_code || !receiver.account_number || !receiver.account_name) {
+    return '';
+  }
+
+  const amount = Math.max(0, Math.round(Number(summary?.grand_total || 0)));
+  const note = `Ban ${summary.table_number || summary.table_id}`;
+  const bankCode = encodeURIComponent(String(receiver.bank_code || '').trim());
+  const accountNumber = encodeURIComponent(String(receiver.account_number || '').trim());
+  const accountName = encodeURIComponent(String(receiver.account_name || '').trim());
+  return `https://img.vietqr.io/image/${bankCode}-${accountNumber}-compact2.png?amount=${amount}&addInfo=${encodeURIComponent(note)}&accountName=${accountName}`;
+}
+
+function buildReceiptHtml(summary, paymentMethod, paymentReceiver) {
+  const qrUrl =
+    paymentMethod === 'BANK_TRANSFER'
+      ? paymentReceiver?.qr_code_url || buildTransferQrUrl(summary, paymentReceiver)
+      : '';
+  const activeSession = summary.active_session;
+  const items = activeSession ? (summary.active_cafe_items || []) : [];
+  const billiardSubtotal = Number(activeSession?.subtotal || 0);
+  const billiardDiscount = Number(activeSession?.discount_amount || 0);
+  const billiardFinal = Number(activeSession?.estimated_total || 0);
+  const cafeSubtotal = Number(summary.cafe_subtotal_total || 0);
+  const cafeDiscount = Number(summary.cafe_discount_total || 0);
+  const cafeFinal = Number(summary.cafe_outstanding_total || 0);
+  const rows = items
+    .map(
+      (item) => `
+        <tr>
+          <td>Do uong</td>
+          <td>${item.order_id}</td>
+          <td>${formatMoney(item.subtotal_amount)} VND</td>
+          <td>${formatMoney(item.discount_amount)} VND</td>
+          <td>${formatMoney(item.total_amount)} VND</td>
+          <td>${item.status === 'PENDING_PAYMENT' ? 'Cho thanh toan' : 'Da ghi nhan'}</td>
+        </tr>
+      `,
+    )
+    .join('');
+
+  return `
+    <!doctype html>
+    <html lang="vi">
+      <head>
+        <meta charset="utf-8" />
+        <title>Hoa don Ban ${summary.table_number || summary.table_id}</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 0; padding: 24px; color: #111; }
+          .bill { max-width: 720px; margin: 0 auto; border: 1px solid #d0d0d0; border-radius: 18px; padding: 20px; }
+          .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+          .brand { font-size: 20px; font-weight: 800; }
+          .muted { color: #666; font-size: 12px; }
+          .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+          .box { border: 1px solid #e5e5e5; border-radius: 14px; padding: 12px 14px; }
+          .box .label { font-size: 12px; color: #666; }
+          .box .value { font-size: 18px; font-weight: 800; margin-top: 4px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+          th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #eee; font-size: 13px; }
+          th { font-size: 12px; text-transform: uppercase; color: #666; }
+          .total { display: flex; justify-content: space-between; margin-top: 16px; font-size: 18px; font-weight: 800; }
+          .qr { width: 160px; height: 160px; border: 1px solid #eee; border-radius: 14px; object-fit: cover; }
+          .footer { margin-top: 18px; font-size: 12px; color: #666; }
+          @media print { body { padding: 0; } .bill { border: 0; border-radius: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="bill">
+          <div class="head">
+            <div>
+              <div class="brand">Bida &amp; Cafe 82</div>
+              <div class="muted">Hoa don tam tinh / Thanh toan</div>
+              <div class="muted">Ban ${summary.table_number || summary.table_id}</div>
+            </div>
+            ${qrUrl ? `<img class="qr" src="${qrUrl}" alt="QR" />` : ''}
+          </div>
+          <div class="grid">
+            <div class="box"><div class="label">Hang thanh vien</div><div class="value">${summary.customer_rank_name || 'Standard'}</div></div>
+            <div class="box"><div class="label">Phuong thuc</div><div class="value">${paymentMethod === 'BANK_TRANSFER' ? 'Chuyen khoan' : 'Tien mat'}</div></div>
+            <div class="box"><div class="label">Tien ban goc</div><div class="value">${formatMoney(billiardSubtotal)} VND</div></div>
+            <div class="box"><div class="label">Giam gia ban</div><div class="value">-${formatMoney(billiardDiscount)} VND</div></div>
+            <div class="box"><div class="label">Tien ban sau giam</div><div class="value">${formatMoney(billiardFinal)} VND</div></div>
+            <div class="box"><div class="label">Tong cong can thu</div><div class="value">${formatMoney(summary.grand_total)} VND</div></div>
+            <div class="box"><div class="label">Tien do uong goc</div><div class="value">${formatMoney(cafeSubtotal)} VND</div></div>
+            <div class="box"><div class="label">Giam gia do uong</div><div class="value">-${formatMoney(cafeDiscount)} VND</div></div>
+            <div class="box"><div class="label">Tien do uong sau giam</div><div class="value">${formatMoney(cafeFinal)} VND</div></div>
+          </div>
+          <table>
+            <thead>
+              <tr><th>Loai</th><th>Ma don</th><th>Tien goc</th><th>Giam gia</th><th>Thanh tien</th><th>Trang thai</th></tr>
+            </thead>
+            <tbody>
+              ${rows || '<tr><td colspan="6">Khong co chi tiet</td></tr>'}
+            </tbody>
+          </table>
+          <div class="total">
+            <span>Thanh toan</span>
+            <span>${formatMoney(summary.grand_total)} VND</span>
+          </div>
+          ${
+            paymentMethod === 'BANK_TRANSFER' && paymentReceiver
+              ? `
+            <div class="footer">
+              Ngan hang: ${paymentReceiver.bank_name} | Chu TK: ${paymentReceiver.account_name} | So TK: ${paymentReceiver.account_number}
+            </div>`
+              : ''
+          }
+          <div class="footer">
+            ${activeSession ? `Thoi gian choi: ${activeSession.minutes} phut | Giam gia ban: ${activeSession.discount_pct}% (-${formatMoney(billiardDiscount)} VND) | Thuc thu: ${formatMoney(activeSession.estimated_total)} VND` : 'Khong co phien dang chay'}
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
 }
 
 function LoginForm({ onLogin }) {
@@ -109,8 +266,11 @@ function LoginForm({ onLogin }) {
 
 function App() {
   const [auth, setAuth] = useState(loadAuth());
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState(() => resolveTabFromPathname(window.location.pathname));
   const [message, setMessage] = useState('');
+  const [refreshSignal, setRefreshSignal] = useState(0);
+
+  const [checkoutRequests, setCheckoutRequests] = useState([]);
 
   useEffect(() => {
     if (!auth?.access_token) return undefined;
@@ -118,18 +278,58 @@ function App() {
     const source = createNotificationStream(
       auth.access_token,
       (event) => {
+        console.log('NHAN DUOC SU KIEN:', event);
         if (!event?.type) return;
+        
+        if (event.type === 'checkout:requested') {
+          setCheckoutRequests(prev => [...prev, {
+            id: Date.now(),
+            table_number: event.data.table_number,
+            user_name: event.data.user_name,
+            at: new Date()
+          }]);
+          return;
+        }
+
         setMessage(`Su kien moi: ${event.type}`);
+        if (event.type === 'order:new' || event.type?.startsWith('kitchen:')) {
+          setRefreshSignal((value) => value + 1);
+        }
       },
-      () => {}
+      (error) => {
+        console.error('LOI LUONG THONG BAO:', error);
+        setMessage('Loi ket noi thoi gian thuc. Dang thu lai...');
+      }
     );
+
+    source.onopen = () => {
+      console.log('DA KET NOI VOI MAY CHU (REALTIME OK)');
+      setMessage('Da ket noi du lieu thoi gian thuc');
+    };
 
     return () => source.close();
   }, [auth?.access_token]);
 
+  useEffect(() => {
+    const handlePopState = () => {
+      setActiveTab(resolveTabFromPathname(window.location.pathname));
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   function handleLogin(payload) {
     saveAuth(payload);
     setAuth(payload);
+  }
+
+  function handleChangeTab(tab) {
+    setActiveTab(tab);
+    const nextPath = getPathForTab(tab);
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, '', nextPath);
+    }
   }
 
   async function handleLogout() {
@@ -151,13 +351,16 @@ function App() {
       activeTab={activeTab}
       auth={auth}
       message={message}
-      onChangeTab={setActiveTab}
+      onChangeTab={handleChangeTab}
       onLogout={handleLogout}
+      refreshSignal={refreshSignal}
+      checkoutRequests={checkoutRequests}
+      setCheckoutRequests={setCheckoutRequests}
     />
   );
 }
 
-function AdminShell({ auth, activeTab, onChangeTab, onLogout, message }) {
+function AdminShell({ auth, activeTab, onChangeTab, onLogout, message, refreshSignal, checkoutRequests, setCheckoutRequests }) {
   const [staff, setStaff] = useState(auth.staff || null);
   const [loadingStaff, setLoadingStaff] = useState(!auth.staff);
 
@@ -185,24 +388,33 @@ function AdminShell({ auth, activeTab, onChangeTab, onLogout, message }) {
   return (
     <div className="admin-shell">
       <aside className="sidebar">
-        <div>
-          <div className="brand-mark">B82</div>
-          <h2>Quan tri quan</h2>
-          <p className="muted">
-            Web admin de test luong user, nhan thong bao va xu ly van hanh tai quay.
-          </p>
+        <div className="sidebar-brand">
+          <div className="brand-mark">
+            <span className="material-symbols-outlined">coffee</span>
+          </div>
+          <div className="brand-copy">
+            <h2>Bida &amp; Cafe</h2>
+            <p>Management Hub</p>
+          </div>
         </div>
-
         <nav className="sidebar-nav">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              className={tab.id === activeTab ? 'nav-pill active' : 'nav-pill'}
-              onClick={() => onChangeTab(tab.id)}
-              type="button"
-            >
-              {tab.label}
-            </button>
+          {NAV_GROUPS.map((group) => (
+            <section className="nav-group" key={group.label}>
+              <div className="nav-group-label">{group.label}</div>
+              <div className="nav-group-items">
+                {group.items.map((item) => (
+                  <button
+                    key={item.id}
+                    className={item.id === activeTab ? 'nav-pill active' : 'nav-pill'}
+                    onClick={() => onChangeTab(item.id)}
+                    type="button"
+                  >
+                    <span className="material-symbols-outlined">{item.icon}</span>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
           ))}
         </nav>
 
@@ -218,19 +430,60 @@ function AdminShell({ auth, activeTab, onChangeTab, onLogout, message }) {
       </aside>
 
       <main className="main-panel">
+        {checkoutRequests.length > 0 && (
+          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', background: '#fff5f5', borderBottom: '2px solid #feb2b2' }}>
+            {checkoutRequests.map(req => (
+              <div key={req.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', padding: '16px 24px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)', border: '1px solid #fc8181' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <span className="material-icons" style={{ color: '#e53e3e', fontSize: '32px' }}>notifications_active</span>
+                  <div>
+                    <div style={{ fontWeight: '800', fontSize: '18px', color: '#c53030' }}>
+                      BAN {req.table_number} YEU CAU THANH TOAN
+                    </div>
+                    <div style={{ fontSize: '14px', color: '#718096' }}>
+                      Khach hang: {req.user_name} | {req.at.toLocaleTimeString()}
+                    </div>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setCheckoutRequests(prev => prev.filter(r => r.id !== req.id))}
+                  style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#e53e3e', color: '#fff', fontWeight: '700', cursor: 'pointer' }}
+                >
+                  Xac nhan
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <header className="topbar">
+          <div className="topbar-actions">
+            <div className="topbar-user">
+              <div>
+                <p>{staff?.full_name || auth.staff?.full_name || 'Bida & Cafe Admin'}</p>
+                <span>{staff?.role || auth.staff?.role || 'Quan tri vien'}</span>
+              </div>
+              <div className="topbar-avatar">
+                <span className="material-symbols-outlined">person</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className="page-caption">
           <div>
             <div className="eyebrow">BACKEND: {getBaseUrl()}</div>
-            <h1>{TABS.find((tab) => tab.id === activeTab)?.label || 'Admin'}</h1>
+            {activeTab !== 'dashboard' ? <h1>{TABS.find((tab) => tab.id === activeTab)?.label || 'Admin'}</h1> : null}
           </div>
           <div className="notice-chip">{message || 'Dang ket noi du lieu thoi gian thuc'}</div>
-        </header>
+        </div>
 
         {activeTab === 'dashboard' ? <DashboardPanel token={auth.access_token} /> : null}
         {activeTab === 'tables' ? <TablesPanel token={auth.access_token} /> : null}
+        {activeTab === 'kitchen' ? <KitchenPanel token={auth.access_token} refreshSignal={refreshSignal} /> : null}
         {activeTab === 'bookings' ? <BookingsPanel token={auth.access_token} /> : null}
         {activeTab === 'topups' ? <TopupsPanel token={auth.access_token} /> : null}
         {activeTab === 'members' ? <MembersPanel token={auth.access_token} /> : null}
+        {activeTab === 'products' ? <ProductsPanel token={auth.access_token} /> : null}
       </main>
     </div>
   );
@@ -243,6 +496,7 @@ function DashboardPanel({ token }) {
   const [topProducts, setTopProducts] = useState([]);
   const [occupancy, setOccupancy] = useState({ tables: [], peak_hours: [] });
   const [systemBalance, setSystemBalance] = useState(null);
+  const [tables, setTables] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -250,17 +504,19 @@ function DashboardPanel({ token }) {
     setLoading(true);
     setError('');
     try {
-      const [overview, products, occupancyResult, balance] = await Promise.all([
+      const [overview, products, occupancyResult, balance, tableList] = await Promise.all([
         api.overview(token, period, date),
         api.topProducts(token, date),
         api.occupancy(token, date),
         api.systemBalance(token),
+        api.tables(token),
       ]);
 
       setData(overview);
       setTopProducts(products.items || []);
       setOccupancy(occupancyResult);
       setSystemBalance(balance);
+      setTables(tableList || []);
     } catch (nextError) {
       setError(nextError.message);
     } finally {
@@ -272,76 +528,231 @@ function DashboardPanel({ token }) {
     load();
   }, [token, period, date]);
 
+  const cafeRevenue = Number(data?.cafe_revenue || 0);
+  const billiardRevenue = Number(data?.billiard_revenue || 0);
+  const totalDeposits = Number(data?.total_deposits || 0);
+  const totalRevenue = Number(data?.total_revenue || 0);
+  const peakHours = [...(occupancy.peak_hours || [])].sort((left, right) => left.hour_slot - right.hour_slot);
+  const peakMax = Math.max(1, ...peakHours.map((item) => Number(item.total_sessions || 0)));
+  const topProductMax = Math.max(1, ...topProducts.map((item) => Number(item.total_quantity || 0)));
+  const tableSummary = tables.reduce(
+    (acc, table) => {
+      const status = String(table.status || '').toUpperCase();
+      if (status === 'AVAILABLE') acc.available += 1;
+      else if (status === 'OCCUPIED') acc.occupied += 1;
+      else if (status === 'RESERVED') acc.reserved += 1;
+      else if (status === 'CLEANING') acc.cleaning += 1;
+      return acc;
+    },
+    { available: 0, occupied: 0, reserved: 0, cleaning: 0 }
+  );
+  const totalUsers = Number(systemBalance?.total_users || 0);
+
   return (
-    <section className="content-grid">
-      <div className="panel full-width">
-        <div className="panel-head">
-          <div>
-            <div className="eyebrow">SO LIEU VAN HANH</div>
-            <h3>Tong quan doanh thu va cong suat</h3>
-          </div>
-          <div className="filters">
-            <select value={period} onChange={(event) => setPeriod(event.target.value)}>
-              <option value="day">Ngay</option>
-              <option value="week">Tuan</option>
-              <option value="month">Thang</option>
-            </select>
-            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-            <button className="ghost-button" onClick={load} type="button">
-              Tai lai
-            </button>
-          </div>
+    <section className="dashboard-modern">
+      <div className="dashboard-page-head">
+        <div className="dashboard-title-block">
+          <div className="eyebrow">BẢNG ĐIỀU HÀNH</div>
+          <h2>Bảng điều hành</h2>
+          <p className="muted">
+            Theo dõi doanh thu, công suất bàn, món bán chạy và dòng tiền theo thời gian thực.
+          </p>
         </div>
 
-        {error ? <div className="error-box">{error}</div> : null}
-
-        {loading ? (
-          <div className="empty-state">Dang tai dashboard...</div>
-        ) : (
-          <div className="stat-grid">
-            <MetricCard label="Doanh thu cafe" value={`${formatMoney(data?.cafe_revenue)} VND`} />
-            <MetricCard label="Doanh thu bida" value={`${formatMoney(data?.billiard_revenue)} VND`} />
-            <MetricCard label="Tong nap tien" value={`${formatMoney(data?.total_deposits)} VND`} />
-            <MetricCard label="So du he thong" value={`${formatMoney(systemBalance?.total_wallet_balance)} VND`} />
-          </div>
-        )}
+        <div className="dashboard-toolbar">
+          <select value={period} onChange={(event) => setPeriod(event.target.value)} className="dashboard-chip">
+            <option value="day">Theo ngày</option>
+            <option value="week">Theo tuần</option>
+            <option value="month">Theo tháng</option>
+          </select>
+          <input className="dashboard-chip dashboard-date-input" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+          <button className="dashboard-chip dashboard-chip-primary" onClick={load} type="button">
+            <span className="material-symbols-outlined">download</span>
+            <span>Xuất file</span>
+          </button>
+        </div>
       </div>
 
-      <div className="panel">
-        <div className="panel-head">
-          <h3>San pham ban chay</h3>
-        </div>
-        <div className="list-stack">
-          {topProducts.map((item) => (
-            <div className="list-item" key={item.product_id}>
-              <div>
-                <strong>{item.product_name}</strong>
-                <span>Ban {item.total_quantity} ly</span>
+      {error ? <div className="error-box full-span">{error}</div> : null}
+
+      {loading ? (
+        <div className="panel full-span empty-state">Đang tải dashboard...</div>
+      ) : (
+        <>
+          <div className="dashboard-stats-row">
+            <article className="dashboard-stat-card">
+              <div className="dashboard-stat-top">
+                <span className="material-symbols-outlined dashboard-stat-icon">local_cafe</span>
+                <span className="dashboard-stat-label">Doanh thu cafe</span>
+                <span className="material-symbols-outlined dashboard-stat-help">info</span>
               </div>
-              <strong>{formatMoney(item.total_revenue)} VND</strong>
-            </div>
-          ))}
-          {!topProducts.length ? <div className="empty-state">Chua co du lieu.</div> : null}
-        </div>
-      </div>
-
-      <div className="panel">
-        <div className="panel-head">
-          <h3>Cong suat ban</h3>
-        </div>
-        <div className="list-stack">
-          {(occupancy.tables || []).slice(0, 8).map((table) => (
-            <div className="list-item" key={table.table_id}>
-              <div>
-                <strong>Ban {table.table_number}</strong>
-                <span>{table.total_sessions} session</span>
+              <div className="dashboard-stat-value">{`${formatMoney(cafeRevenue)}đ`}</div>
+              <div className="dashboard-stat-trend up">
+                <span className="material-symbols-outlined">trending_up</span>
+                <span>15.8%</span>
               </div>
-              <strong>{table.total_minutes} phut</strong>
-            </div>
-          ))}
-          {!occupancy.tables?.length ? <div className="empty-state">Chua co du lieu.</div> : null}
-        </div>
-      </div>
+            </article>
+
+            <article className="dashboard-stat-card accent">
+              <div className="dashboard-stat-top">
+                <span className="material-symbols-outlined dashboard-stat-icon">sports_esports</span>
+                <span className="dashboard-stat-label">Doanh thu bida</span>
+                <span className="material-symbols-outlined dashboard-stat-help">info</span>
+              </div>
+              <div className="dashboard-stat-value">{`${formatMoney(billiardRevenue)}đ`}</div>
+              <div className="dashboard-stat-trend down">
+                <span className="material-symbols-outlined">trending_down</span>
+                <span>3.4%</span>
+              </div>
+            </article>
+
+            <article className="dashboard-stat-card">
+              <div className="dashboard-stat-top">
+                <span className="material-symbols-outlined dashboard-stat-icon">account_balance_wallet</span>
+                <span className="dashboard-stat-label">Tổng nạp tiền</span>
+                <span className="material-symbols-outlined dashboard-stat-help">info</span>
+              </div>
+              <div className="dashboard-stat-big">{`${formatMoney(totalDeposits)}đ`}</div>
+              <div className="dashboard-stat-trend up">
+                <span className="material-symbols-outlined">trending_up</span>
+                <span>24.2%</span>
+              </div>
+            </article>
+          </div>
+
+          <div className="dashboard-bento-grid">
+            <article className="dashboard-panel dashboard-chart-panel-modern">
+              <div className="panel-head modern-panel-head">
+                <div className="panel-head-title">
+                  <span className="material-symbols-outlined dashboard-panel-icon">bar_chart</span>
+                  <h3>Biểu đồ tổng quan</h3>
+                </div>
+                <div className="dashboard-head-tools">
+                  <button type="button">Lọc</button>
+                  <button type="button">Xếp hạng</button>
+                  <button type="button">...</button>
+                </div>
+              </div>
+
+              <div className="dashboard-overview-number">
+                <strong>{`${formatMoney(totalRevenue)}đ`}</strong>
+                <div>
+                  <span className="dashboard-kpi-badge">+15.8%</span>
+                  <span className="muted">
+                    {period === 'day'
+                      ? 'Doanh thu trong ngày'
+                      : period === 'week'
+                        ? 'Doanh thu trong tuần'
+                        : 'Doanh thu trong tháng'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="dashboard-bars">
+                {peakHours.length ? (
+                  peakHours.slice(0, 8).map((hour) => {
+                    const height = Math.max(12, Math.round((Number(hour.total_sessions || 0) / peakMax) * 100));
+                    return (
+                      <div className="dashboard-bar-item" key={hour.hour_slot}>
+                        <div className="dashboard-bar-track">
+                          <div className="dashboard-bar-fill" style={{ height: `${height}%` }} />
+                        </div>
+                        <span>{String(hour.hour_slot).padStart(2, '0')}h</span>
+                        <strong>{hour.total_sessions}</strong>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="empty-state full-span">Chưa có dữ liệu theo khung giờ.</div>
+                )}
+              </div>
+            </article>
+
+            <article className="dashboard-panel dashboard-side-summary">
+              <div className="panel-head modern-panel-head">
+                <div className="panel-head-title">
+                  <span className="material-symbols-outlined dashboard-panel-icon">table_bar</span>
+                  <h3>Công suất bàn</h3>
+                </div>
+              </div>
+
+              <div className="occupancy-grid compact">
+                <div className="occupancy-card">
+                  <span>Bàn trống</span>
+                  <strong>{tables.length ? tableSummary.available : 0}</strong>
+                </div>
+                <div className="occupancy-card">
+                  <span>Đang chơi</span>
+                  <strong>{tableSummary.occupied}</strong>
+                </div>
+                <div className="occupancy-card">
+                  <span>Đã giữ chỗ</span>
+                  <strong>{tableSummary.reserved}</strong>
+                </div>
+                <div className="occupancy-card">
+                  <span>Đang dọn</span>
+                  <strong>{tableSummary.cleaning}</strong>
+                </div>
+              </div>
+
+              <div className="dashboard-side-note">
+                <div>
+                  <span>Tổng khách hàng</span>
+                  <strong>{totalUsers}</strong>
+                </div>
+                <div>
+                  <span>Bàn đang theo dõi</span>
+                  <strong>{tables.length}</strong>
+                </div>
+              </div>
+            </article>
+
+            <article className="dashboard-panel dashboard-products-panel-modern">
+              <div className="panel-head modern-panel-head">
+                <div className="panel-head-title">
+                  <span className="material-symbols-outlined dashboard-panel-icon">restaurant_menu</span>
+                  <h3>Top món bán chạy</h3>
+                </div>
+                <a href="#/">Xem tất cả</a>
+              </div>
+
+              <div className="integration-table">
+                <div className="integration-table-head">
+                  <span>Món</span>
+                  <span>Loại</span>
+                  <span>Hiệu suất</span>
+                  <span className="text-right">Doanh thu</span>
+                </div>
+                {topProducts.slice(0, 3).map((item, index) => {
+                  const width = Math.max(16, Math.round((Number(item.total_quantity || 0) / topProductMax) * 100));
+                  return (
+                    <div className="integration-row" key={item.product_id}>
+                      <div className="integration-app">
+                        <div className={`integration-badge tone-${index === 0 ? 'primary' : index === 1 ? 'secondary' : 'tertiary'}`}>
+                          {String(index + 1).padStart(2, '0')}
+                        </div>
+                        <div>
+                          <strong>{item.product_name}</strong>
+                          <span>Đồ uống</span>
+                        </div>
+                      </div>
+                      <div className="integration-type">Bán chạy</div>
+                      <div className="integration-progress">
+                        <div className="integration-track">
+                          <div className="integration-fill" style={{ width: `${width}%` }} />
+                        </div>
+                        <span>{width}%</span>
+                      </div>
+                      <div className="integration-revenue">{`${formatMoney(item.total_revenue)}đ`}</div>
+                    </div>
+                  );
+                })}
+                {!topProducts.length ? <div className="empty-state">Chưa có dữ liệu.</div> : null}
+              </div>
+            </article>
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -350,8 +761,11 @@ function TablesPanel({ token }) {
   const [tables, setTables] = useState([]);
   const [summary, setSummary] = useState(null);
   const [summaryTableId, setSummaryTableId] = useState(null);
+  const [paymentReceivers, setPaymentReceivers] = useState([]);
+  const [selectedReceiverId, setSelectedReceiverId] = useState('');
   const [loading, setLoading] = useState(true);
   const [checkingOut, setCheckingOut] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState('CASH');
   const [error, setError] = useState('');
 
   async function load() {
@@ -371,6 +785,29 @@ function TablesPanel({ token }) {
     load();
   }, [token]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadReceivers() {
+      try {
+        const result = await api.paymentReceivers(token);
+        if (cancelled) return;
+        setPaymentReceivers(result);
+        const activeReceiver = result.find((item) => item.is_active) || result[0] || null;
+        setSelectedReceiverId((current) => current || (activeReceiver ? String(activeReceiver.receiver_id) : ''));
+      } catch (nextError) {
+        if (!cancelled) {
+          setError(nextError.message);
+        }
+      }
+    }
+
+    loadReceivers();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
   async function runAction(action, tableId) {
     try {
       if (action === 'CLEANING') {
@@ -388,7 +825,9 @@ function TablesPanel({ token }) {
 
   async function openSummary(tableId) {
     try {
+      setSummary(null);
       setSummaryTableId(tableId);
+      setError('');
       setSummary(await api.tableInvoiceSummary(token, tableId));
     } catch (nextError) {
       setError(nextError.message);
@@ -402,7 +841,7 @@ function TablesPanel({ token }) {
 
     try {
       setCheckingOut(true);
-      await api.checkoutTable(token, summaryTableId);
+      await api.checkoutTable(token, summaryTableId, paymentMethod);
       await load();
       setSummary(await api.tableInvoiceSummary(token, summaryTableId));
     } catch (nextError) {
@@ -410,6 +849,27 @@ function TablesPanel({ token }) {
     } finally {
       setCheckingOut(false);
     }
+  }
+
+  function printInvoice() {
+    if (!summary || !summary.active_session) {
+      return;
+    }
+
+    const billWindow = window.open('', '_blank', 'width=820,height=1000');
+    if (!billWindow) {
+      setError('Khong the mo cua so in hoa don. Hay kiem tra popup.');
+      return;
+    }
+
+    billWindow.document.open();
+    const selectedReceiver = paymentReceivers.find((item) => String(item.receiver_id) === String(selectedReceiverId));
+    billWindow.document.write(buildReceiptHtml(summary, paymentMethod, selectedReceiver));
+    billWindow.document.close();
+    billWindow.focus();
+    billWindow.onload = () => {
+      billWindow.print();
+    };
   }
 
   return (
@@ -469,56 +929,323 @@ function TablesPanel({ token }) {
           <div className="empty-state">Chon mot ban de xem tong tien tam tinh.</div>
         ) : (
           <div className="detail-stack">
-            <div className="invoice-grid">
-              <MetricCard
-                label="Tien ban tam tinh"
-                value={`${formatMoney(summary.current_estimated_total)} VND`}
-              />
-              <MetricCard
-                label="Do uong chua thu"
-                value={`${formatMoney(summary.cafe_outstanding_total)} VND`}
-              />
-              <MetricCard
-                label="Tong cong can thu"
-                value={`${formatMoney(summary.grand_total)} VND`}
-              />
-            </div>
-            <div className="invoice-grid">
-              <MetricCard
-                label="Do uong da ghi nhan"
-                value={`${formatMoney(summary.cafe_total)} VND`}
-              />
-              <MetricCard
-                label="Muc da chot truoc do"
-                value={`${formatMoney(summary.historical_total)} VND`}
-              />
-            </div>
-            <div className="list-stack">
-              {(summary.active_cafe_items || []).map((item) => (
-                <div className="list-item" key={item.order_id}>
-                  <div>
-                    <strong>Don nuoc #{item.order_id}</strong>
-                    <span>{item.status === 'PENDING_PAYMENT' ? 'Chua thu tien' : 'Da ghi nhan'}</span>
-                  </div>
-                  <strong>{formatMoney(item.total_amount)} VND</strong>
+            {summary.active_session ? (
+              <>
+                <div className="invoice-grid">
+                  <MetricCard
+                    label="Tien ban goc"
+                    value={`${formatMoney(summary.active_session.subtotal)} VND`}
+                  />
+                  <MetricCard
+                    label="Giam gia ban"
+                    value={`-${formatMoney(summary.active_session.discount_amount)} VND`}
+                  />
+                  <MetricCard
+                    label="Tien ban sau giam"
+                    value={`${formatMoney(summary.current_estimated_total)} VND`}
+                  />
                 </div>
-              ))}
-              {!summary.active_cafe_items?.length ? (
-                <div className="empty-state">Chua co don nuoc nao trong luot choi nay.</div>
-              ) : null}
-            </div>
-            <div className="inline-actions">
-              <button
-                className="primary-button"
-                disabled={!summary.active_session || checkingOut}
-                onClick={checkoutTable}
-                type="button"
-              >
-                {checkingOut ? 'Dang thu tien...' : 'Thu tien va dong ban'}
-              </button>
-            </div>
+                <div className="invoice-preview">
+                  <div className="invoice-preview-head">
+                    <div>
+                      <div className="eyebrow">HOA DON IN</div>
+                      <h4>Ban {summary.table_number || summary.table_id}</h4>
+                      <span>Hang: {summary.customer_rank_name || 'Standard'}</span>
+                    </div>
+                    {paymentMethod === 'BANK_TRANSFER' ? (
+                      <img
+                        className="invoice-qr"
+                        src={
+                          paymentReceivers.find((item) => String(item.receiver_id) === String(selectedReceiverId))?.qr_code_url ||
+                          buildTransferQrUrl(
+                            summary,
+                            paymentReceivers.find((item) => String(item.receiver_id) === String(selectedReceiverId))
+                          )
+                        }
+                        alt="QR hoa don"
+                      />
+                    ) : null}
+                  </div>
+                  <div className="invoice-preview-grid">
+                    <div>
+                      <span className="invoice-label">Tien do uong goc</span>
+                      <strong>{`${formatMoney(summary.cafe_subtotal_total)} VND`}</strong>
+                    </div>
+                    <div>
+                      <span className="invoice-label">Giam gia do uong</span>
+                      <strong>{`-${formatMoney(summary.cafe_discount_total)} VND`}</strong>
+                    </div>
+                    <div>
+                      <span className="invoice-label">Phuong thuc</span>
+                      <strong>{paymentMethod === 'BANK_TRANSFER' ? 'Chuyen khoan' : 'Tien mat'}</strong>
+                    </div>
+                    <div>
+                      <span className="invoice-label">Tong thu</span>
+                      <strong>{`${formatMoney(summary.grand_total)} VND`}</strong>
+                    </div>
+                  </div>
+                  {paymentMethod === 'BANK_TRANSFER' ? (
+                    <div className="invoice-bank-note">
+                      {selectedReceiverId && paymentReceivers.length ? (
+                        <>
+                          Chuyen khoan den: {paymentReceivers.find((item) => String(item.receiver_id) === String(selectedReceiverId))?.bank_name}{' '}
+                          | {paymentReceivers.find((item) => String(item.receiver_id) === String(selectedReceiverId))?.account_name}{' '}
+                          | {paymentReceivers.find((item) => String(item.receiver_id) === String(selectedReceiverId))?.account_number}
+                        </>
+                      ) : (
+                        'Chua co tai khoan chuyen khoan duoc cau hinh.'
+                      )}
+                    </div>
+                  ) : null}
+                  <div className="invoice-preview-list">
+                    {(summary.active_cafe_items || []).slice(0, 4).map((item) => (
+                      <div key={item.order_id} className="invoice-preview-row">
+                        <span>Don #{item.order_id}</span>
+                        <span>{`${formatMoney(item.subtotal_amount)} VND - ${formatMoney(item.discount_amount)} VND = ${formatMoney(item.total_amount)} VND`}</span>
+                      </div>
+                    ))}
+                    {!summary.active_cafe_items?.length ? (
+                      <div className="muted">Chua co don nuoc trong bill nay.</div>
+                    ) : null}
+                  </div>
+                  <div className="inline-actions invoice-actions">
+                    <button className="ghost-button" type="button" onClick={printInvoice}>
+                      In hoa don
+                    </button>
+                    <button className="ghost-button" type="button" onClick={() => setSummary(null)}>
+                      Dong xem bill
+                    </button>
+                  </div>
+                </div>
+                <div className="list-stack">
+                  {(summary.active_cafe_items || []).map((item) => (
+                    <div className="list-item" key={item.order_id}>
+                      <div>
+                        <strong>Don nuoc #{item.order_id}</strong>
+                        <span>{`${formatMoney(item.subtotal_amount)} VND - ${formatMoney(item.discount_amount)} VND = ${formatMoney(item.total_amount)} VND | ${item.status === 'PENDING_PAYMENT' ? 'Chua thu tien' : 'Da ghi nhan'}`}</span>
+                      </div>
+                      <strong>{formatMoney(item.total_amount)} VND</strong>
+                    </div>
+                  ))}
+                  {!summary.active_cafe_items?.length ? (
+                    <div className="empty-state">Chua co don nuoc nao trong luot choi nay.</div>
+                  ) : null}
+                </div>
+                <div className="inline-actions" style={{ display: 'flex', gap: '8px' }}>
+                  <select 
+                    value={paymentMethod} 
+                    onChange={(e) => setPaymentMethod(e.target.value)} 
+                    disabled={checkingOut}
+                    style={{ padding: '8px 12px', borderRadius: '12px', border: '1px solid #E1E8E6' }}
+                  >
+                    <option value="CASH">Thu tien mat</option>
+                    <option value="BANK_TRANSFER">Chuyen khoan</option>
+                  </select>
+                  {paymentMethod === 'BANK_TRANSFER' ? (
+                    <select
+                      value={selectedReceiverId}
+                      onChange={(e) => setSelectedReceiverId(e.target.value)}
+                      disabled={!paymentReceivers.length || checkingOut}
+                      style={{ padding: '8px 12px', borderRadius: '12px', border: '1px solid #E1E8E6' }}
+                    >
+                      {paymentReceivers.length ? null : <option value="">Chua co tai khoan</option>}
+                      {paymentReceivers
+                        .filter((item) => item.is_active)
+                        .map((item) => (
+                          <option key={item.receiver_id} value={String(item.receiver_id)}>
+                            {item.display_name} - {item.account_number}
+                          </option>
+                        ))}
+                    </select>
+                  ) : null}
+                  <button
+                    className="primary-button"
+                    disabled={checkingOut}
+                    onClick={checkoutTable}
+                    type="button"
+                  >
+                    {checkingOut ? 'Dang thu tien...' : 'Thu tien va dong ban'}
+                  </button>
+                  <button
+                    className="ghost-button"
+                    disabled={checkingOut}
+                    onClick={printInvoice}
+                    type="button"
+                  >
+                    In hoa don
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="empty-state">Ban chua co phien dang choi, khong co hoa don can thu.</div>
+            )}
           </div>
         )}
+      </div>
+    </section>
+  );
+}
+
+function KitchenPanel({ token, refreshSignal }) {
+  const [date, setDate] = useState(today());
+  const [status, setStatus] = useState('');
+  const [payload, setPayload] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [actionOrderId, setActionOrderId] = useState(null);
+  const [error, setError] = useState('');
+
+  async function load() {
+    setLoading(true);
+    setError('');
+    try {
+      setPayload(await api.kitchenOrders(token, date, status));
+    } catch (nextError) {
+      setError(nextError.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, [token, date, status, refreshSignal]);
+
+  async function advanceOrder(orderId, nextStatus) {
+    try {
+      setActionOrderId(orderId);
+      await api.updateKitchenOrder(token, orderId, nextStatus);
+      await load();
+    } catch (nextError) {
+      setError(nextError.message);
+    } finally {
+      setActionOrderId(null);
+    }
+  }
+
+  const groups = payload?.groups || [];
+
+  return (
+    <section className="content-grid">
+      <div className="panel full-width">
+        <div className="panel-head">
+          <div>
+            <div className="eyebrow">TRANG THAI CHE BIEN</div>
+            <h3>Bep / Pha che real-time</h3>
+          </div>
+          <div className="filters">
+            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+            <select value={status} onChange={(event) => setStatus(event.target.value)}>
+              <option value="">Tat ca dang xu ly</option>
+              <option value="PENDING">Cho nhan mon</option>
+              <option value="PREPARING">Dang lam</option>
+              <option value="DONE">Da xong</option>
+              <option value="SERVED">Da phuc vu</option>
+            </select>
+            <button className="ghost-button" onClick={load} type="button">
+              Tai lai
+            </button>
+          </div>
+        </div>
+
+        {error ? <div className="error-box">{error}</div> : null}
+
+        {loading ? (
+          <div className="empty-state">Dang tai don cho bep...</div>
+        ) : (
+          <div className="kitchen-board">
+            {groups.map((group) => (
+              <section className="kitchen-group" key={group.table_id || group.label}>
+                <div className="kitchen-group-head">
+                  <div>
+                    <h4>{group.label}</h4>
+                    <span>{group.orders.length} don</span>
+                  </div>
+                </div>
+
+                <div className="kitchen-order-stack">
+                  {group.orders.map((order) => {
+                    const nextStatus =
+                      order.kitchen_status === 'PENDING'
+                        ? 'PREPARING'
+                        : order.kitchen_status === 'PREPARING'
+                          ? 'DONE'
+                          : order.kitchen_status === 'DONE'
+                            ? 'SERVED'
+                            : null;
+
+                    return (
+                      <article className="kitchen-order-card" key={order.order_id}>
+                        <div className="kitchen-order-head">
+                          <div>
+                            <strong>Don #{order.order_id}</strong>
+                            <span>
+                              {formatDateTime(order.created_at)} | {order.full_name || order.phone || 'Khach le'}
+                            </span>
+                          </div>
+                          <div className="status-flow">
+                            <span className={`status-badge kitchen-${order.kitchen_status.toLowerCase()}`}>
+                              {KITCHEN_STATUS_LABELS[order.kitchen_status] || order.kitchen_status}
+                            </span>
+                            <span className="status-badge status-cleaning">
+                              {order.payment_status || 'PENDING'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="kitchen-items">
+                          {(order.items || []).map((item) => (
+                            <div className="kitchen-item" key={item.detail_id}>
+                              <div>
+                                <strong>
+                                  {item.product_name} x{item.quantity}
+                                </strong>
+                                <span>{item.category || 'Do uong'} | {formatMoney(item.unit_price)} VND</span>
+                              </div>
+                              <span className={`status-pill kitchen-${item.status.toLowerCase()}`}>
+                                {KITCHEN_STATUS_LABELS[item.status] || item.status}
+                              </span>
+                            </div>
+                          ))}
+                          {!order.items?.length ? <div className="empty-state">Don nay chua co chi tiet.</div> : null}
+                        </div>
+
+                        <div className="kitchen-actions">
+                          {nextStatus ? (
+                            <button
+                              className="primary-button"
+                              disabled={actionOrderId === order.order_id}
+                              onClick={() => advanceOrder(order.order_id, nextStatus)}
+                              type="button"
+                            >
+                              {actionOrderId === order.order_id
+                                ? 'Dang cap nhat...'
+                                : nextStatus === 'PREPARING'
+                                  ? 'Nhan mon'
+                                  : nextStatus === 'DONE'
+                                    ? 'Hoan thanh'
+                                    : 'Da phuc vu'}
+                            </button>
+                          ) : (
+                            <span className="muted">Da phuc vu xong</span>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                  {!group.orders.length ? <div className="empty-state">Khong co don nao.</div> : null}
+                </div>
+              </section>
+            ))}
+
+            {!groups.length ? <div className="empty-state">Khong co don cafe nao can xu ly.</div> : null}
+          </div>
+        )}
+
+        <div className="kitchen-summary">
+          <MetricCard label="Tong don hien thi" value={String(payload?.total_orders || 0)} />
+          <MetricCard label="Trang thai loc" value={status || 'Tat ca dang xu ly'} />
+          <MetricCard label="Ngay xem" value={date} />
+        </div>
       </div>
     </section>
   );
@@ -560,6 +1287,18 @@ function BookingsPanel({ token }) {
     }
   }
 
+  const bookingSummary = bookings.reduce(
+    (acc, booking) => {
+      const state = String(booking.status || '').toUpperCase();
+      if (state === 'PENDING') acc.pending += 1;
+      if (state === 'RESERVED') acc.reserved += 1;
+      if (state === 'CHECKED_IN') acc.checkedIn += 1;
+      if (state === 'COMPLETED') acc.completed += 1;
+      return acc;
+    },
+    { pending: 0, reserved: 0, checkedIn: 0, completed: 0 },
+  );
+
   return (
     <section className="content-grid">
       <div className="panel full-width">
@@ -579,6 +1318,13 @@ function BookingsPanel({ token }) {
         </div>
 
         {error ? <div className="error-box">{error}</div> : null}
+
+        <div className="booking-flow-strip">
+          <span>Chờ xác nhận: {bookingSummary.pending}</span>
+          <span>Đã giữ chỗ: {bookingSummary.reserved}</span>
+          <span>Đã check-in: {bookingSummary.checkedIn}</span>
+          <span>Hoàn tất: {bookingSummary.completed}</span>
+        </div>
 
         {loading ? (
           <div className="empty-state">Dang tai booking...</div>
@@ -616,9 +1362,7 @@ function BookingsPanel({ token }) {
                     </>
                   ) : null}
                   {booking.status === 'CHECKED_IN' ? (
-                    <button type="button" onClick={() => patchBooking(booking.booking_id, 'COMPLETED')}>
-                      Hoan tat
-                    </button>
+                    <span className="muted">Dang choi | Hoan tat nam o hoa don ban</span>
                   ) : null}
                   {!['PENDING', 'RESERVED', 'CHECKED_IN'].includes(booking.status) ? (
                     <span className="muted">Khong con thao tac</span>
@@ -831,11 +1575,12 @@ function MembersPanel({ token }) {
   );
 }
 
-function MetricCard({ label, value }) {
+function MetricCard({ label, value, hint = '' }) {
   return (
     <div className="metric-card">
       <span>{label}</span>
       <strong>{value}</strong>
+      {hint ? <small className="metric-hint">{hint}</small> : null}
     </div>
   );
 }

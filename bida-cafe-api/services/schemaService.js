@@ -84,6 +84,100 @@ async function ensureSchema(pool) {
     CREATE INDEX IF NOT EXISTS idx_wallet_topup_requests_user
     ON public.wallet_topup_requests (user_id, status, created_at);
   `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS public.payment_receivers (
+        receiver_id SERIAL PRIMARY KEY,
+        display_name VARCHAR(100) NOT NULL,
+        bank_name VARCHAR(100) NOT NULL,
+        bank_code VARCHAR(30) NOT NULL DEFAULT '',
+        account_name VARCHAR(120) NOT NULL,
+        account_number VARCHAR(50) NOT NULL,
+        qr_code_url TEXT,
+        notes TEXT,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+    await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_receivers_account_unique
+    ON public.payment_receivers (bank_name, account_number);
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.payment_receivers
+    ADD COLUMN IF NOT EXISTS bank_code VARCHAR(30) NOT NULL DEFAULT '';
+  `);
+
+  await pool.query(`
+    INSERT INTO public.payment_receivers (
+      display_name, bank_name, bank_code, account_name, account_number, qr_code_url, notes, is_active, sort_order
+    )
+    VALUES (
+      'Vietcombank',
+      'Vietcombank',
+      'VIETCOMBANK',
+      'Nguyen Quoc Dat',
+      '1023165478',
+      NULL,
+      'Tai khoan chuyen khoan mac dinh',
+      TRUE,
+      1
+    )
+    ON CONFLICT (bank_name, account_number) DO UPDATE
+    SET display_name = EXCLUDED.display_name,
+        bank_code = EXCLUDED.bank_code,
+        account_name = EXCLUDED.account_name,
+        qr_code_url = EXCLUDED.qr_code_url,
+        notes = EXCLUDED.notes,
+        is_active = TRUE,
+        sort_order = LEAST(public.payment_receivers.sort_order, EXCLUDED.sort_order),
+        updated_at = NOW();
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_payment_receivers_active_sort
+    ON public.payment_receivers (is_active, sort_order, receiver_id);
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.orders
+    ADD COLUMN IF NOT EXISTS kitchen_status VARCHAR(20) NOT NULL DEFAULT 'PENDING';
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.order_details
+    ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'PENDING';
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_orders_kitchen_status_created
+    ON public.orders (kitchen_status, created_at);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_order_details_order_status
+    ON public.order_details (order_id, status);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.categories (
+      category_id SERIAL PRIMARY KEY,
+      name VARCHAR(100) UNIQUE NOT NULL,
+      description TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // Migrate existing distinct categories from products if any exist and table is empty
+  await pool.query(`
+    INSERT INTO public.categories (name)
+    SELECT DISTINCT category FROM public.products WHERE category IS NOT NULL AND category != ''
+    ON CONFLICT (name) DO NOTHING;
+  `);
 }
 
 module.exports = { ensureSchema };

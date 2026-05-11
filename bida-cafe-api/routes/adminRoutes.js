@@ -316,12 +316,20 @@ function createAdminRouter({ pool, notificationHub }) {
 
     try {
       const tableId = req.params.tableId;
-      const activeSessionResult = await client.query(
-        `SELECT session_id, user_id, start_time, status
-         FROM public.billiard_sessions
-         WHERE table_id = $1 AND status = 'ACTIVE'
-         ORDER BY session_id DESC
+      const tableResult = await client.query(
+        `SELECT table_id, table_number, qr_code_path
+         FROM public.billiard_tables
+         WHERE table_id = $1
          LIMIT 1`,
+        [tableId]
+      );
+
+        const activeSessionResult = await client.query(
+          `SELECT session_id, user_id, start_time, status
+           FROM public.billiard_sessions
+           WHERE table_id = $1 AND status = 'ACTIVE'
+           ORDER BY session_id DESC
+           LIMIT 1`,
         [tableId]
       );
 
@@ -342,16 +350,18 @@ function createAdminRouter({ pool, notificationHub }) {
       let activeCafeItems = [];
       let cafeOutstandingTotal = 0;
       let cafeSettledTotal = 0;
+      let customerRankName = null;
 
-      if (activeSessionResult.rowCount > 0) {
-        const activeSession = activeSessionResult.rows[0];
-        const member = await getUserMembership(client, activeSession.user_id);
-        const pricePerHour = await getCurrentPricePerHour(client);
-        const minutes = Math.ceil((Date.now() - new Date(activeSession.start_time).getTime()) / 60000);
-        const subtotal = Math.round((minutes / 60) * pricePerHour);
-        const discountPct = toNumber(member.discount_billiard_pct);
-        const discountAmount = calculateDiscountAmount(subtotal, discountPct);
-        const estimatedTotal = subtotal - discountAmount;
+        if (activeSessionResult.rowCount > 0) {
+          const activeSession = activeSessionResult.rows[0];
+          const member = await getUserMembership(client, activeSession.user_id);
+          customerRankName = member.rank_name;
+          const pricePerHour = await getCurrentPricePerHour(client);
+          const minutes = Math.ceil((Date.now() - new Date(activeSession.start_time).getTime()) / 60000);
+          const subtotal = Math.round((minutes / 60) * pricePerHour);
+          const discountPct = toNumber(member.discount_billiard_pct);
+          const discountAmount = calculateDiscountAmount(subtotal, discountPct);
+          const estimatedTotal = subtotal - discountAmount;
 
         activeSessionCharge = {
           session_id: activeSession.session_id,
@@ -364,18 +374,47 @@ function createAdminRouter({ pool, notificationHub }) {
           estimated_total: estimatedTotal,
         };
 
-        const cafeOrdersResult = await client.query(
-          `SELECT order_id, user_id, total_amount, order_type, status, created_at
-           FROM public.orders
-           WHERE user_id = $1
-             AND created_at >= $2
-             AND order_type = 'CAFE'
-             AND status IN ('DONE', 'PENDING_PAYMENT')
-           ORDER BY created_at DESC`,
-          [activeSession.user_id, activeSession.start_time]
-        );
+          const cafeOrdersResult = await client.query(
+            `SELECT o.order_id, o.user_id, o.total_amount, o.order_type, o.status, o.created_at,
+                    COALESCE(SUM(od.quantity * od.unit_price), 0) AS subtotal
+             FROM public.orders o
+             LEFT JOIN public.order_details od ON od.order_id = o.order_id
+             WHERE o.user_id = $1
+               AND o.created_at >= $2
+               AND o.order_type = 'CAFE'
+               AND o.status = 'PENDING_PAYMENT'
+             GROUP BY o.order_id, o.user_id, o.total_amount, o.order_type, o.status, o.created_at
+             ORDER BY o.created_at DESC`,
+            [activeSession.user_id, activeSession.start_time]
+          );
 
-        activeCafeItems = cafeOrdersResult.rows.map((row) => ({
+          activeCafeItems = cafeOrdersResult.rows.map((row) => {
+            const subtotalAmount = toNumber(row.subtotal);
+            const finalAmount = toNumber(row.total_amount);
+            const cafeDiscountAmount = Math.max(0, subtotalAmount - finalAmount);
+
+            return {
+              order_id: row.order_id,
+              user_id: row.user_id,
+              subtotal_amount: subtotalAmount,
+              total_amount: finalAmount,
+              discount_pct: toNumber(member.discount_cafe_pct),
+              discount_amount: cafeDiscountAmount,
+              order_type: row.order_type,
+              status: row.status,
+              created_at: row.created_at,
+            };
+          });
+
+          cafeOutstandingTotal = activeCafeItems
+            .filter((item) => item.status === 'PENDING_PAYMENT')
+            .reduce((sum, item) => sum + item.total_amount, 0);
+          cafeSettledTotal = activeCafeItems
+            .filter((item) => item.status === 'DONE')
+            .reduce((sum, item) => sum + item.total_amount, 0);
+        }
+
+        const mergedItems = mergedOrdersResult.rows.map((row) => ({
           order_id: row.order_id,
           user_id: row.user_id,
           total_amount: toNumber(row.total_amount),
@@ -383,44 +422,35 @@ function createAdminRouter({ pool, notificationHub }) {
           status: row.status,
           created_at: row.created_at,
         }));
-        cafeOutstandingTotal = activeCafeItems
-          .filter((item) => item.status === 'PENDING_PAYMENT')
-          .reduce((sum, item) => sum + item.total_amount, 0);
-        cafeSettledTotal = activeCafeItems
-          .filter((item) => item.status === 'DONE')
-          .reduce((sum, item) => sum + item.total_amount, 0);
+
+        const historicalTotal = mergedItems.reduce((sum, item) => sum + item.total_amount, 0);
+        const currentEstimated = activeSessionCharge ? activeSessionCharge.estimated_total : 0;
+        const cafeTotal = cafeOutstandingTotal + cafeSettledTotal;
+        const cafeSubtotalTotal = activeCafeItems.reduce((sum, item) => sum + toNumber(item.subtotal_amount), 0);
+        const cafeDiscountTotal = Math.max(0, cafeSubtotalTotal - cafeTotal);
+
+        res.json({
+          table_id: Number(tableId),
+          table_number: tableResult.rows[0]?.table_number || null,
+          table_qr_code_path: tableResult.rows[0]?.qr_code_path || null,
+          customer_rank_name: customerRankName,
+          active_session: activeSessionCharge,
+          active_cafe_items: activeCafeItems,
+          settled_items: mergedItems,
+          historical_total: historicalTotal,
+          cafe_outstanding_total: cafeOutstandingTotal,
+          cafe_settled_total: cafeSettledTotal,
+          cafe_subtotal_total: cafeSubtotalTotal,
+          cafe_discount_total: cafeDiscountTotal,
+          cafe_total: cafeTotal,
+          current_estimated_total: currentEstimated,
+          grand_total: currentEstimated + cafeOutstandingTotal,
+        });
+      } catch (error) {
+        res.status(400).json({ error: error.message });
+      } finally {
+        client.release();
       }
-
-      const mergedItems = mergedOrdersResult.rows.map((row) => ({
-        order_id: row.order_id,
-        user_id: row.user_id,
-        total_amount: toNumber(row.total_amount),
-        order_type: row.order_type,
-        status: row.status,
-        created_at: row.created_at,
-      }));
-
-      const historicalTotal = mergedItems.reduce((sum, item) => sum + item.total_amount, 0);
-      const currentEstimated = activeSessionCharge ? activeSessionCharge.estimated_total : 0;
-      const cafeTotal = cafeOutstandingTotal + cafeSettledTotal;
-
-      res.json({
-        table_id: Number(tableId),
-        active_session: activeSessionCharge,
-        active_cafe_items: activeCafeItems,
-        settled_items: mergedItems,
-        historical_total: historicalTotal,
-        cafe_outstanding_total: cafeOutstandingTotal,
-        cafe_settled_total: cafeSettledTotal,
-        cafe_total: cafeTotal,
-        current_estimated_total: currentEstimated,
-        grand_total: historicalTotal + currentEstimated + cafeOutstandingTotal,
-      });
-    } catch (error) {
-      res.status(400).json({ error: error.message });
-    } finally {
-      client.release();
-    }
   });
 
   router.get('/staffs', requireRoles('ADMIN'), async (req, res) => {
@@ -764,6 +794,116 @@ function createAdminRouter({ pool, notificationHub }) {
       });
 
       res.json({ success: true, ingredient: result.rows[0] });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  router.get('/payment-receivers', async (req, res) => {
+    try {
+      const result = await pool.query(
+        `SELECT receiver_id, display_name, bank_name, bank_code, account_name, account_number,
+                qr_code_url, notes, is_active, sort_order, created_at, updated_at
+         FROM public.payment_receivers
+         ORDER BY is_active DESC, sort_order ASC, receiver_id ASC`
+      );
+
+      res.json(result.rows);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  router.post('/payment-receivers', requireRoles('ADMIN'), async (req, res) => {
+    try {
+      const {
+        displayName,
+        bankName,
+        bankCode = '',
+        accountName,
+        accountNumber,
+        qrCodeUrl = null,
+        notes = null,
+        isActive = true,
+        sortOrder = 0,
+      } = req.body;
+
+      if (!displayName || !bankName || !accountName || !accountNumber) {
+        throw new Error('Thiếu thông tin tài khoản thanh toán');
+      }
+
+      const result = await pool.query(
+        `INSERT INTO public.payment_receivers (
+           display_name, bank_name, bank_code, account_name, account_number, qr_code_url, notes, is_active, sort_order
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING receiver_id, display_name, bank_name, bank_code, account_name, account_number,
+                   qr_code_url, notes, is_active, sort_order, created_at, updated_at`,
+        [displayName, bankName, bankCode, accountName, accountNumber, qrCodeUrl, notes, Boolean(isActive), sortOrder]
+      );
+
+      res.json({ success: true, payment_receiver: result.rows[0] });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  router.patch('/payment-receivers/:receiverId', requireRoles('ADMIN'), async (req, res) => {
+    try {
+      const {
+        displayName = null,
+        bankName = null,
+        bankCode = null,
+        accountName = null,
+        accountNumber = null,
+        qrCodeUrl = null,
+        notes = null,
+        isActive = null,
+        sortOrder = null,
+      } = req.body;
+
+      const result = await pool.query(
+        `UPDATE public.payment_receivers
+         SET display_name = COALESCE($1, display_name),
+             bank_name = COALESCE($2, bank_name),
+             bank_code = COALESCE($3, bank_code),
+             account_name = COALESCE($4, account_name),
+             account_number = COALESCE($5, account_number),
+             qr_code_url = COALESCE($6, qr_code_url),
+             notes = COALESCE($7, notes),
+             is_active = COALESCE($8, is_active),
+             sort_order = COALESCE($9, sort_order),
+             updated_at = NOW()
+         WHERE receiver_id = $10
+         RETURNING receiver_id, display_name, bank_name, bank_code, account_name, account_number,
+                    qr_code_url, notes, is_active, sort_order, created_at, updated_at`,
+        [displayName, bankName, bankCode, accountName, accountNumber, qrCodeUrl, notes, isActive, sortOrder, req.params.receiverId]
+      );
+
+      if (result.rowCount === 0) {
+        throw new Error('Khong tim thay tai khoan thanh toan');
+      }
+
+      res.json({ success: true, payment_receiver: result.rows[0] });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  router.delete('/payment-receivers/:receiverId', requireRoles('ADMIN'), async (req, res) => {
+    try {
+      const result = await pool.query(
+        `DELETE FROM public.payment_receivers
+         WHERE receiver_id = $1
+         RETURNING receiver_id`,
+        [req.params.receiverId]
+      );
+
+      if (result.rowCount === 0) {
+        throw new Error('Khong tim thay tai khoan thanh toan');
+      }
+
+      res.json({ success: true, receiver_id: result.rows[0].receiver_id });
     } catch (error) {
       res.status(400).json({ error: error.message });
     }

@@ -36,23 +36,27 @@ class _WebNotificationStreamClient implements NotificationStreamClient {
     final source = html.EventSource(url);
     _source = source;
 
-    for (final eventType in _eventTypes) {
-      _subscriptions.add(
-        html.EventStreamProvider<html.MessageEvent>(eventType)
-            .forTarget(source)
-            .listen((event) {
-          try {
-            final rawData = event.data;
-            final map = rawData is String
-                ? jsonDecode(rawData) as Map<String, dynamic>
-                : <String, dynamic>{};
-            onEvent(NotificationEvent(type: eventType, data: map));
-          } catch (error) {
-            onError?.call(error);
+    // Nghe tat ca cac su kien tu tin nhan mac dinh (onMessage)
+    _subscriptions.add(
+      source.onMessage.listen((event) {
+        try {
+          final rawData = event.data;
+          final map = rawData is String
+              ? jsonDecode(rawData) as Map<String, dynamic>
+              : <String, dynamic>{};
+          
+          // Lay type tu trong data ra
+          final type = map['type'] as String?;
+          final data = map['data'] as Map<String, dynamic>? ?? {};
+          
+          if (type != null) {
+            onEvent(NotificationEvent(type: type, data: data));
           }
-        }),
-      );
-    }
+        } catch (error) {
+          onError?.call(error);
+        }
+      }),
+    );
 
     _subscriptions.add(
       source.onError.listen((event) {

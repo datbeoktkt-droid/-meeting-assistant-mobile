@@ -85,12 +85,13 @@ export const api = {
   tables: (token) => request('/api/admin/tables', {}, token),
   tableInvoiceSummary: (token, tableId) =>
     request(`/api/admin/tables/${tableId}/invoice-summary`, {}, token),
-  checkoutTable: (token, tableId) =>
+  paymentReceivers: (token) => request('/api/admin/payment-receivers', {}, token),
+  checkoutTable: (token, tableId, paymentMethod = 'WALLET') =>
     request(
       '/api/table/end',
       {
         method: 'POST',
-        body: JSON.stringify({ tableId }),
+        body: JSON.stringify({ tableId, paymentMethod }),
       },
       token
     ),
@@ -127,6 +128,30 @@ export const api = {
       `/api/admin/bookings/${bookingId}/check-in`,
       {
         method: 'POST',
+      },
+      token
+    ),
+  kitchenOrders: (token, date = '', status = '') =>
+    request(
+      `/api/admin/kitchen/orders${date ? `?date=${encodeURIComponent(date)}` : ''}${status ? `${date ? '&' : '?'}status=${encodeURIComponent(status)}` : ''}`,
+      {},
+      token
+    ),
+  updateKitchenOrder: (token, orderId, status) =>
+    request(
+      `/api/admin/kitchen/orders/${orderId}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      },
+      token
+    ),
+  updateKitchenOrderItem: (token, detailId, status) =>
+    request(
+      `/api/admin/kitchen/order-items/${detailId}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
       },
       token
     ),

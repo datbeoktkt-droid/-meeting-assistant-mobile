@@ -47,23 +47,41 @@ class UserSession {
 
 class ActiveSessionData {
   const ActiveSessionData({
+    required this.tableId,
     required this.tableNumber,
     required this.minutes,
-    required this.estimatedTotal,
+    required this.billiardSubtotal,
+    required this.billiardTotal,
     required this.discountPct,
+    required this.discountAmount,
+    required this.cafeTotal,
+    required this.estimatedTotal,
+    required this.cafeItems,
   });
 
+  final int tableId;
   final int tableNumber;
   final int minutes;
-  final double estimatedTotal;
+  final double billiardSubtotal;
+  final double billiardTotal;
   final double discountPct;
+  final double discountAmount;
+  final double cafeTotal;
+  final double estimatedTotal;
+  final List<dynamic> cafeItems;
 
   factory ActiveSessionData.fromJson(Map<String, dynamic> json) {
     return ActiveSessionData(
-      tableNumber: toInt(json['table_number']),
+      tableId: toInt(json['table_id'] ?? json['tableId']),
+      tableNumber: toInt(json['table_number'] ?? json['tableNumber']),
       minutes: toInt(json['minutes']),
-      estimatedTotal: toDouble(json['estimated_total']),
-      discountPct: toDouble(json['discount_pct']),
+      billiardSubtotal: toDouble(json['billiard_subtotal'] ?? json['billiardSubtotal'] ?? json['subtotal_billiard']),
+      billiardTotal: toDouble(json['billiard_total'] ?? json['billiardTotal'] ?? json['total_billiard']),
+      discountPct: toDouble(json['discount_pct'] ?? json['discountPct']),
+      discountAmount: toDouble(json['discount_amount'] ?? json['discountAmount'] ?? json['billiard_discount']),
+      cafeTotal: toDouble(json['cafe_total'] ?? json['cafeTotal']),
+      estimatedTotal: toDouble(json['estimated_total'] ?? json['estimatedTotal'] ?? json['grand_total'] ?? json['total_amount']),
+      cafeItems: json['cafe_items'] as List<dynamic>? ?? json['cafeItems'] as List<dynamic>? ?? [],
     );
   }
 }

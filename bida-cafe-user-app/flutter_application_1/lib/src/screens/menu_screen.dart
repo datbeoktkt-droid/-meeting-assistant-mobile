@@ -21,11 +21,31 @@ class _MenuPageState extends State<_MenuPage> {
   String _selectedCategory = 'Tat ca';
   bool _submittingTray = false;
   String _paymentMethod = 'CASH';
+  int? _activeTableId;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
-    _future = _loadData();
+    // Load initial data and set activeTableId from results
+    _future = _loadData().then((data) {
+      if (mounted && data.length >= 2) {
+        final home = data[1] as HomeBundle;
+        setState(() {
+          _activeTableId = home.activeSession?.tableId;
+        });
+      }
+      return data;
+    });
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) _reload();
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -48,7 +68,13 @@ class _MenuPageState extends State<_MenuPage> {
     setState(() {
       _future = nextFuture;
     });
-    await nextFuture;
+    final data = await nextFuture;
+    if (mounted && data.length >= 2) {
+      final home = data[1] as HomeBundle;
+      setState(() {
+        _activeTableId = home.activeSession?.tableId;
+      });
+    }
   }
 
   void _changeQty(ProductInfo item, int delta) {
@@ -67,11 +93,6 @@ class _MenuPageState extends State<_MenuPage> {
     if (_quantities.isEmpty) {
       return;
     }
-
-    setState(() {
-      _submittingTray = true;
-    });
-
     try {
       var total = 0.0;
       var itemCount = 0;
@@ -83,6 +104,7 @@ class _MenuPageState extends State<_MenuPage> {
             'productId': entry.key,
             'quantity': entry.value,
             'paymentMethod': _paymentMethod,
+            if (_activeTableId != null) 'tableId': _activeTableId,
           },
         );
         total += toDouble(result['final_total']);
@@ -92,11 +114,10 @@ class _MenuPageState extends State<_MenuPage> {
       if (!mounted) {
         return;
       }
-      final paymentLabel = _paymentMethod == 'CASH' ? 'Tien mat' : 'Vi';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Da gui $itemCount mon, tong ${formatCurrency(total)} ($paymentLabel)',
+            'Da gui $itemCount mon vao ban, tong ${formatCurrency(total)}',
           ),
         ),
       );
@@ -104,6 +125,10 @@ class _MenuPageState extends State<_MenuPage> {
         _quantities.clear();
       });
       await _reload();
+      if (mounted) {
+        // Only pop once, and ensure it's the right context
+        Navigator.of(context).popUntil((route) => route.isFirst); 
+      }
     } on ApiException catch (error) {
       if (!mounted) {
         return;
@@ -117,6 +142,137 @@ class _MenuPageState extends State<_MenuPage> {
           _submittingTray = false;
         });
       }
+    }
+  }
+
+  // ==========================================================================
+  // [GHI CHU]: HAM GUI YEU CAU THANH TOAN DEN ADMIN
+  // Neu bam nut bi loi, hay kiem tra duong dan '/request-staff-checkout' co dung khong.
+  // ==========================================================================
+  Future<void> _requestPayment() async {
+    try {
+      final data = await _future;
+      final home = data?[1] as HomeBundle?;
+      
+      await widget.api.post(
+        '/request-staff-checkout',
+        body: {
+          'userId': home?.user.userId,
+          'userName': home?.user.fullName,
+          'tableNumber': home?.activeSession?.tableNumber,
+        },
+        token: widget.token,
+      );
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Da gui yeu cau thanh toan. Vui long doi nhan vien den ban.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      // [GHI CHU]: In loi chi tiet ra de biet tai sao may chu tra ve HTML
+      print('LOI GOI NHAN VIEN: ${e.message}');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Loi ket noi: ${e.message.substring(0, math.min(e.message.length, 50))}...'), 
+          backgroundColor: Colors.red
+        ),
+      );
+    }
+  }
+  // ==========================================================================
+
+  Future<void> _showInvoiceDialog() async {
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Goi thanh toan'),
+          content: const Text('Ban muon goi nhan vien den ban de thanh toan?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Huy'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF0CC38C)),
+              child: const Text('Gui yeu cau'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed == true) {
+        await _requestPayment();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Loi: ${e.toString()}')),
+      );
+    }
+  }
+
+  Widget _buildInvoiceSection({
+    required String title,
+    required IconData icon,
+    required List<Widget> children,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFFE8F2EF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 18, color: const Color(0xFF0A7F6D)),
+              const SizedBox(width: 10),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF0A7F6D),
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+
+  Future<void> _doCheckout(String method) async {
+    try {
+      final res = await widget.api.post(
+        '/sessions/active/checkout',
+        token: widget.token,
+        body: {'paymentMethod': method},
+      );
+      if (!mounted) return;
+      final total = res['grand_total'];
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Da thanh toan xong! Tong: ${formatCurrency(toDouble(total))}')),
+      );
+      await _reload();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
     }
   }
 
@@ -205,27 +361,13 @@ class _MenuPageState extends State<_MenuPage> {
                 const SizedBox(height: 14),
                 Row(
                   children: [
-                    Expanded(
-                        child: OutlinedButton(
-                          onPressed: () {
-                            setState(() {
-                            _paymentMethod = _paymentMethod == 'CASH'
-                                ? 'WALLET'
-                                : 'CASH';
-                          });
-                        },
-                          child: Text(
-                            'Thanh toan: ${_paymentMethod == 'CASH' ? 'Tien mat' : 'Vi'}',
-                          ),
-                        ),
-                      ),
+                    // Payment method selection removed - all orders go to session bill
                     const SizedBox(width: 12),
                     Expanded(
                       child: FilledButton(
                         onPressed: _submittingTray
                             ? null
                             : () async {
-                                Navigator.of(context).pop();
                                 await _submitTray();
                               },
                         style: FilledButton.styleFrom(
@@ -234,7 +376,7 @@ class _MenuPageState extends State<_MenuPage> {
                         child: Text(
                           _submittingTray
                               ? 'Dang gui...'
-                              : 'Gui khay ${formatCurrency(trayTotal)}',
+                              : 'Gui mon vao ban (${formatCurrency(trayTotal)})',
                         ),
                       ),
                     ),
@@ -262,6 +404,7 @@ class _MenuPageState extends State<_MenuPage> {
 
         final items = snapshot.data![0] as List<ProductInfo>;
         final home = snapshot.data![1] as HomeBundle;
+        
         final categories = <String>{
           'Tat ca',
           ...items.map((item) => item.category),
@@ -299,6 +442,7 @@ class _MenuPageState extends State<_MenuPage> {
                   _MenuHeaderCard(
                     activeSession: home.activeSession,
                     walletBalance: home.user.walletBalance,
+                    onCheckout: home.activeSession != null ? _showInvoiceDialog : null,
                   ),
                   const SizedBox(height: 14),
                   SizedBox(
@@ -378,16 +522,8 @@ class _MenuPageState extends State<_MenuPage> {
                   child: _OrderTrayBar(
                     itemCount: trayCount,
                     orderTotal: trayTotal,
-                    paymentMethod: _paymentMethod,
                     submitting: _submittingTray,
                     onViewTray: () => _openTray(items, trayTotal),
-                    onTogglePayment: () {
-                      setState(() {
-                        _paymentMethod = _paymentMethod == 'CASH'
-                            ? 'WALLET'
-                            : 'CASH';
-                      });
-                    },
                     onSubmit: _submittingTray ? null : _submitTray,
                   ),
                 ),
@@ -403,10 +539,12 @@ class _MenuHeaderCard extends StatelessWidget {
   const _MenuHeaderCard({
     required this.activeSession,
     required this.walletBalance,
+    this.onCheckout,
   });
 
   final ActiveSessionData? activeSession;
   final double walletBalance;
+  final VoidCallback? onCheckout;
 
   @override
   Widget build(BuildContext context) {
@@ -526,6 +664,20 @@ class _MenuHeaderCard extends StatelessWidget {
                     ),
                   ],
                 ),
+                if (activeSession != null) ...[
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: onCheckout,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF0A7F6D),
+                        side: const BorderSide(color: Color(0xFF0A7F6D)),
+                      ),
+                      child: const Text('Xem hoa don / Goi thanh toan'),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -670,7 +822,10 @@ class _MenuProductImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = item.imageUrl;
+    var imageUrl = item.imageUrl;
+    if (imageUrl != null && imageUrl.isNotEmpty && !imageUrl.startsWith('http')) {
+      imageUrl = '${ApiConfig.baseUrl}$imageUrl';
+    }
     return Container(
       height: 220,
       decoration: const BoxDecoration(
@@ -702,10 +857,10 @@ class _MenuProductImage extends StatelessWidget {
               ),
               gradient: LinearGradient(
                 colors: [
-                  Colors.black.withValues(
-                    alpha: imageUrl != null && imageUrl.isNotEmpty ? 0.18 : 0,
+                  Colors.black.withOpacity(
+                    imageUrl != null && imageUrl.isNotEmpty ? 0.18 : 0,
                   ),
-                  Colors.black.withValues(alpha: 0.28),
+                  Colors.black.withOpacity(0.28),
                 ],
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
@@ -782,19 +937,15 @@ class _OrderTrayBar extends StatelessWidget {
   const _OrderTrayBar({
     required this.itemCount,
     required this.orderTotal,
-    required this.paymentMethod,
     required this.submitting,
     required this.onViewTray,
-    required this.onTogglePayment,
     required this.onSubmit,
   });
 
   final int itemCount;
   final double orderTotal;
-  final String paymentMethod;
   final bool submitting;
   final VoidCallback onViewTray;
-  final VoidCallback onTogglePayment;
   final VoidCallback? onSubmit;
 
   @override
@@ -821,7 +972,7 @@ class _OrderTrayBar extends StatelessWidget {
             width: 42,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.22),
+              color: Colors.white.withOpacity(0.22),
               borderRadius: BorderRadius.circular(14),
             ),
             child: Text(
@@ -866,25 +1017,6 @@ class _OrderTrayBar extends StatelessWidget {
               ),
             ),
           ),
-          InkWell(
-            onTap: onTogglePayment,
-            borderRadius: BorderRadius.circular(12),
-            child: Ink(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                paymentMethod == 'CASH' ? 'Tien mat' : 'Vi',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -918,6 +1050,100 @@ class _OrderTrayBar extends StatelessWidget {
             child: Text(submitting ? '...' : 'Gui'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _InvoiceRow extends StatelessWidget {
+  const _InvoiceRow({
+    required this.label,
+    required this.value,
+    this.isDiscount = false,
+    this.isBold = false,
+    this.color,
+  });
+
+  final String label;
+  final String value;
+  final bool isDiscount;
+  final bool isBold;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: isBold ? 16 : 14,
+              fontWeight: isBold ? FontWeight.w900 : FontWeight.w600,
+              color: color ?? (isDiscount ? const Color(0xFFE63946) : const Color(0xFF4D625D)),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: isBold ? 16 : 14,
+              fontWeight: isBold ? FontWeight.w900 : FontWeight.w700,
+              color: color ?? (isDiscount ? const Color(0xFFE63946) : const Color(0xFF1B4332)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PaymentMethodCard extends StatelessWidget {
+  const _PaymentMethodCard({
+    required this.label,
+    required this.icon,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFE6FBF4) : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF0CC38C) : const Color(0xFFE8F2EF),
+            width: 2,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? const Color(0xFF0A7F6D) : const Color(0xFF7F9690),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+                color: isSelected ? const Color(0xFF0A7F6D) : const Color(0xFF4D625D),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
