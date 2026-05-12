@@ -15,17 +15,19 @@ function createAdminAuthRouter({ pool }) {
   const router = express.Router();
 
   router.post('/login', async (req, res) => {
-    const { username, password } = req.body;
+    const { username: rawUsername, password } = req.body;
 
     try {
-      if (!username || !password) {
+      if (!rawUsername || !password) {
         throw new Error('Thieu username hoac password');
       }
+
+      const username = String(rawUsername).trim().toLowerCase();
 
       const staffResult = await pool.query(
         `SELECT staff_id, username, password_hash, full_name, role, is_active
          FROM public.staff
-         WHERE username = $1`,
+         WHERE LOWER(username) = $1`,
         [username]
       );
 

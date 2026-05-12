@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import ProductsPanel from './ProductsPanel';
+import StaffPanel from './StaffPanel';
+import POSPanel from './POSPanel';
 import {
   api,
   clearAuth,
@@ -17,7 +19,9 @@ const TABS = [
   { id: 'bookings', label: 'Dat ban' },
   { id: 'kitchen', label: 'Bep / Pha che' },
   { id: 'topups', label: 'Nap tien' },
+  { id: 'pos', label: 'POS Menu' },
   { id: 'products', label: 'San pham' },
+  { id: 'staff', label: 'Nhan su' },
 ];
 
 const NAV_GROUPS = [
@@ -35,7 +39,9 @@ const NAV_GROUPS = [
     items: [
       { id: 'kitchen', label: 'Bep / Pha che', icon: 'local_cafe' },
       { id: 'topups', label: 'Nap tien', icon: 'receipt_long' },
+      { id: 'pos', label: 'POS Menu', icon: 'shopping_cart' },
       { id: 'products', label: 'San pham', icon: 'inventory_2' },
+      { id: 'staff', label: 'Nhan su', icon: 'badge' },
     ],
   },
 ];
@@ -484,6 +490,8 @@ function AdminShell({ auth, activeTab, onChangeTab, onLogout, message, refreshSi
         {activeTab === 'topups' ? <TopupsPanel token={auth.access_token} /> : null}
         {activeTab === 'members' ? <MembersPanel token={auth.access_token} /> : null}
         {activeTab === 'products' ? <ProductsPanel token={auth.access_token} /> : null}
+        {activeTab === 'pos' ? <POSPanel token={auth.access_token} /> : null}
+        {activeTab === 'staff' ? <StaffPanel token={auth.access_token} /> : null}
       </main>
     </div>
   );
