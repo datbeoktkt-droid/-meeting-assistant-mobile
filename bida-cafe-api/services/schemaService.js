@@ -1,4 +1,86 @@
+const { hashPassword } = require('./authService');
+
 async function ensureSchema(pool) {
+
+  // =========================================================
+  // [BANG ADMIN] Bang nhan vien (staff)
+  // Chua thong tin dang nhap va phan quyen cho nhan vien quan tri
+  // =========================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.staff (
+      staff_id     SERIAL PRIMARY KEY,
+      username     VARCHAR(50)  NOT NULL UNIQUE,
+      password_hash TEXT        NOT NULL,
+      full_name    VARCHAR(100) NOT NULL,
+      role         VARCHAR(20)  NOT NULL DEFAULT 'STAFF',
+      is_active    BOOLEAN      NOT NULL DEFAULT TRUE,
+      last_login   TIMESTAMP    NULL,
+      created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_staff_username
+    ON public.staff (username);
+  `);
+
+  // =========================================================
+  // [BANG ADMIN] Bang nhat ky hoat dong (activity_logs)
+  // Ghi lai moi hanh dong quan trong cua nhan vien
+  // =========================================================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.activity_logs (
+      log_id       SERIAL PRIMARY KEY,
+      staff_id     INTEGER NULL REFERENCES public.staff(staff_id) ON DELETE SET NULL,
+      action_type  VARCHAR(50)  NOT NULL,
+      description  TEXT,
+      ip_address   VARCHAR(45),
+      created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_activity_logs_staff_created
+    ON public.activity_logs (staff_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_activity_logs_action_created
+    ON public.activity_logs (action_type, created_at DESC);
+  `);
+
+  // =========================================================
+  // [TAI KHOAN MAC DINH]
+  // Tu dong tao tai khoan admin neu chua co nhan vien nao
+  // Username: admin | Password: admin123 | Role: MANAGER
+  // -> Doi mat khau ngay sau khi dang nhap lan dau!
+  // =========================================================
+  const staffCount = await pool.query('SELECT COUNT(*) FROM public.staff');
+  if (parseInt(staffCount.rows[0].count, 10) === 0) {
+    const defaultHash = await hashPassword('admin123');
+    await pool.query(
+      `INSERT INTO public.staff (username, password_hash, full_name, role, is_active)
+       VALUES ('admin', $1, 'Quan tri vien', 'MANAGER', true)
+       ON CONFLICT (username) DO NOTHING`,
+      [defaultHash]
+    );
+    console.log('[SCHEMA] Da tao tai khoan mac dinh: admin / admin123');
+  }
+
+  // =========================================================
+  // [MIGRATION] Chuan hoa role cu sang role moi
+  // ADMIN -> MANAGER | Cac role khong hop le -> STAFF
+  // An toan: chay nhieu lan cung duoc
+  // =========================================================
+  await pool.query(`
+    UPDATE public.staff SET role = 'MANAGER'
+    WHERE role = 'ADMIN'
+  `);
+  await pool.query(`
+    UPDATE public.staff SET role = 'STAFF'
+    WHERE role NOT IN ('MANAGER', 'STAFF', 'CASHIER')
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.table_bookings (
       booking_id SERIAL PRIMARY KEY,

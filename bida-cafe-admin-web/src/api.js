@@ -169,6 +169,23 @@ export const api = {
   members: (token, q = '') =>
     request(`/api/admin/members${q ? `?q=${encodeURIComponent(q)}` : ''}`, {}, token),
   memberDetail: (token, userId) => request(`/api/admin/members/${userId}`, {}, token),
+  products: (token, q = {}) => {
+    const params = new URLSearchParams();
+    if (q.category) params.append('category', q.category);
+    if (q.q) params.append('q', q.q);
+    const qs = params.toString();
+    return request(`/api/admin/products${qs ? `?${qs}` : ''}`, {}, token);
+  },
+  categories: (token) => request('/api/admin/menu/categories', {}, token),
+  createOrder: (token, payload) =>
+    request(
+      '/api/order',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      token
+    ),
 };
 
 export function createNotificationStream(token, onEvent, onError) {

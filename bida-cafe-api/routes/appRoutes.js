@@ -341,13 +341,16 @@ function createAppRouter({ pool, notificationHub }) {
          LEFT JOIN LATERAL (
            SELECT s.session_id, s.user_id
            FROM public.billiard_sessions s
-           WHERE s.table_id = bt.table_id AND s.status = 'ACTIVE'
+           WHERE s.table_id = bt.table_id 
+             AND s.status = 'ACTIVE' 
+             AND bt.status = 'OCCUPIED'
            LIMIT 1
          ) active ON TRUE
          LEFT JOIN LATERAL (
            SELECT b.booking_id, b.booking_start
            FROM public.table_bookings b
-           WHERE b.table_id = bt.table_id AND b.status IN ('PENDING', 'RESERVED', 'CHECKED_IN')
+           WHERE b.table_id = bt.table_id 
+             AND b.status IN ('PENDING', 'RESERVED', 'CHECKED_IN')
            ORDER BY b.booking_start ASC
            LIMIT 1
          ) reserved ON TRUE
@@ -388,9 +391,9 @@ function createAppRouter({ pool, notificationHub }) {
       const activeSessionResult = await client.query(
         `SELECT session_id, user_id, start_time, status
          FROM public.billiard_sessions
-         WHERE table_id = $1 AND status = 'ACTIVE'
+         WHERE table_id = $1 AND status = 'ACTIVE' AND $2 = 'OCCUPIED'
          LIMIT 1`,
-        [req.params.tableId]
+        [req.params.tableId, table.status]
       );
       const upcomingBookingResult = await client.query(
         `SELECT booking_id, user_id, customer_name, customer_phone, booking_start, booking_end, status
@@ -1119,17 +1122,17 @@ function createAppRouter({ pool, notificationHub }) {
       let orderStatus = 'DONE';
       let balance = null;
 
-      if (tableId) {
-        const sessionResult = await client.query(
-          `SELECT session_id FROM public.billiard_sessions
-           WHERE table_id = $1 AND status = 'ACTIVE' LIMIT 1`,
-          [tableId]
-        );
-        if (sessionResult.rowCount > 0) {
-          sessionId = sessionResult.rows[0].session_id;
-          // All orders during session are PENDING_PAYMENT to be settled at checkout
-          orderStatus = 'PENDING_PAYMENT';
-        }
+      // Tu dong tim session dang hoat dong cho user nay neu khong co tableId
+      const sessionQuery = tableId 
+        ? [`SELECT session_id FROM public.billiard_sessions WHERE table_id = $1 AND status = 'ACTIVE' LIMIT 1`, [tableId]]
+        : [`SELECT session_id FROM public.billiard_sessions WHERE user_id = $1 AND status = 'ACTIVE' LIMIT 1`, [req.userAuth.user_id]];
+
+      const sessionResult = await client.query(sessionQuery[0], sessionQuery[1]);
+      
+      if (sessionResult.rowCount > 0) {
+        sessionId = sessionResult.rows[0].session_id;
+        // Moi don hang trong phien deu la PENDING_PAYMENT de thanh toan khi checkout
+        orderStatus = 'PENDING_PAYMENT';
       }
 
       // Individual payment processing only for walk-in orders (no session)

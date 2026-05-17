@@ -48,16 +48,15 @@ function createCoreRouter({ pool, notificationHub }) {
       let sessionId = null;
       let orderStatus = 'DONE';
 
-      if (tableId) {
-        const sessionResult = await client.query(
-          `SELECT session_id FROM public.billiard_sessions
-           WHERE table_id = $1 AND status = 'ACTIVE' LIMIT 1`,
-          [tableId]
-        );
-        if (sessionResult.rowCount > 0) {
-          sessionId = sessionResult.rows[0].session_id;
-          orderStatus = 'PENDING_PAYMENT';
-        }
+      // Tu dong tim session dang hoat dong neu co tableId hoac userId
+      const sessionQuery = tableId 
+        ? [`SELECT session_id FROM public.billiard_sessions WHERE table_id = $1 AND status = 'ACTIVE' LIMIT 1`, [tableId]]
+        : [`SELECT session_id FROM public.billiard_sessions WHERE user_id = $1 AND status = 'ACTIVE' LIMIT 1`, [userId]];
+
+      const sessionResult = await client.query(sessionQuery[0], sessionQuery[1]);
+      if (sessionResult.rowCount > 0) {
+        sessionId = sessionResult.rows[0].session_id;
+        orderStatus = 'PENDING_PAYMENT';
       }
 
       let newWalletBalance = null;
@@ -151,7 +150,7 @@ function createCoreRouter({ pool, notificationHub }) {
     }
   });
 
-  router.post('/deposit', requireAuth, requireRoles('ADMIN'), async (req, res) => {
+  router.post('/deposit', requireAuth, requireRoles('ADMIN', 'MANAGER'), async (req, res) => {
     const { userId, amount, staffId = null, paymentMethod = 'CASH', referenceCode = null } = req.body;
     const client = await pool.connect();
 
@@ -228,7 +227,7 @@ function createCoreRouter({ pool, notificationHub }) {
     }
   });
 
-  router.post('/table/start', requireAuth, requireRoles('ADMIN', 'STAFF', 'BARISTA'), async (req, res) => {
+  router.post('/table/start', requireAuth, requireRoles('ADMIN', 'MANAGER', 'STAFF', 'BARISTA'), async (req, res) => {
     const { tableId, userId } = req.body;
     const client = await pool.connect();
 
@@ -308,7 +307,7 @@ function createCoreRouter({ pool, notificationHub }) {
     }
   });
 
-  router.post('/table/end', requireAuth, requireRoles('ADMIN', 'STAFF', 'BARISTA'), async (req, res) => {
+  router.post('/table/end', requireAuth, requireRoles('ADMIN', 'MANAGER', 'STAFF', 'BARISTA'), async (req, res) => {
     const { tableId, paymentMethod = 'WALLET' } = req.body;
     const client = await pool.connect();
 

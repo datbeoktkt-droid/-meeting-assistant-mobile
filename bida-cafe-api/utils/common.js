@@ -49,9 +49,14 @@ function resolveMonthFilter(queryMonth) {
 }
 
 function parseDateTime(value, fieldName) {
-  const parsed = new Date(value);
-  if (!value || Number.isNaN(parsed.getTime())) {
-    throw new Error(`${fieldName} khong hop le`);
+  if (!value) throw new Error(`${fieldName} khong duoc de trong`);
+  
+  // Ho tro thay the khoang trang thanh 'T' de new Date() doc tot hon
+  const sanitized = String(value).replace(' ', 'T');
+  const parsed = new Date(sanitized);
+  
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`${fieldName} khong hop le (dinh dang mong muon: YYYY-MM-DDTHH:mm)`);
   }
 
   return parsed;

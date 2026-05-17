@@ -112,7 +112,7 @@ function createKitchenRouter({ pool, notificationHub }) {
 
   router.use(requireAuth);
 
-  router.get('/orders', requireRoles('ADMIN', 'MANAGER', 'STAFF', 'BARISTA'), async (req, res) => {
+  router.get('/orders', requireRoles('ADMIN', 'STAFF', 'BARISTA'), async (req, res) => {
     try {
       const date = resolveDateFilter(req.query.date);
       const rawStatus = req.query.status || '';
@@ -159,7 +159,7 @@ function createKitchenRouter({ pool, notificationHub }) {
     }
   });
 
-  router.patch('/orders/:orderId/status', requireRoles('ADMIN', 'MANAGER', 'STAFF', 'BARISTA'), async (req, res) => {
+  router.patch('/orders/:orderId/status', requireRoles('ADMIN', 'STAFF', 'BARISTA'), async (req, res) => {
     const client = await pool.connect();
     try {
       const nextStatus = normalizeKitchenStatus(req.body.status);
@@ -221,7 +221,7 @@ function createKitchenRouter({ pool, notificationHub }) {
     }
   });
 
-  router.patch('/order-items/:detailId/status', requireRoles('ADMIN', 'MANAGER', 'STAFF', 'BARISTA'), async (req, res) => {
+  router.patch('/order-items/:detailId/status', requireRoles('ADMIN', 'STAFF', 'BARISTA'), async (req, res) => {
     const client = await pool.connect();
     try {
       const nextStatus = normalizeKitchenStatus(req.body.status);
