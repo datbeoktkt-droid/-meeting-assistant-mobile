@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { getBaseUrl } from './api';
 
+const numberFormatter = new Intl.NumberFormat('vi-VN');
+
 export default function ProductsPanel({ token }) {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -336,11 +338,11 @@ export default function ProductsPanel({ token }) {
             <form onSubmit={saveProduct} className="login-form">
               <label>
                 <span>Tên sản phẩm</span>
-                <input required value={productForm.product_name} onChange={e => setProductForm({...productForm, product_name: e.target.value})} />
+                <input required value={productForm.product_name} onChange={e => { const val = e.target.value; setProductForm(prev => ({...prev, product_name: val})); }} />
               </label>
               <label>
                 <span>Danh mục</span>
-                <select required value={productForm.category} onChange={e => setProductForm({...productForm, category: e.target.value})}>
+                <select required value={productForm.category} onChange={e => { const val = e.target.value; setProductForm(prev => ({...prev, category: val})); }}>
                   <option value="">Chọn danh mục</option>
                   {categories.map(c => <option key={c.category_id} value={c.name}>{c.name}</option>)}
                 </select>
@@ -350,10 +352,10 @@ export default function ProductsPanel({ token }) {
                 <input 
                   type="text" 
                   required 
-                  value={productForm.price ? new Intl.NumberFormat('vi-VN').format(productForm.price) : ''} 
+                  value={productForm.price ? numberFormatter.format(productForm.price) : ''} 
                   onChange={e => {
                     const raw = e.target.value.replace(/[^0-9]/g, '');
-                    setProductForm({...productForm, price: raw});
+                    setProductForm(prev => ({...prev, price: raw}));
                   }} 
                 />
               </label>
@@ -362,10 +364,10 @@ export default function ProductsPanel({ token }) {
                 <input 
                   type="text" 
                   required 
-                  value={productForm.stock_quantity ? new Intl.NumberFormat('vi-VN').format(productForm.stock_quantity) : ''} 
+                  value={productForm.stock_quantity ? numberFormatter.format(productForm.stock_quantity) : ''} 
                   onChange={e => {
                     const raw = e.target.value.replace(/[^0-9]/g, '');
-                    setProductForm({...productForm, stock_quantity: raw});
+                    setProductForm(prev => ({...prev, stock_quantity: raw}));
                   }} 
                 />
               </label>
@@ -395,11 +397,11 @@ export default function ProductsPanel({ token }) {
             <form onSubmit={saveCategory} className="login-form">
               <label>
                 <span>Tên danh mục</span>
-                <input required value={categoryForm.name} onChange={e => setCategoryForm({...categoryForm, name: e.target.value})} />
+                <input required value={categoryForm.name} onChange={e => { const val = e.target.value; setCategoryForm(prev => ({...prev, name: val})); }} />
               </label>
               <label>
                 <span>Mô tả</span>
-                <textarea rows="3" style={{ width: '100%', padding: '12px 14px', borderRadius: '14px', border: '1px solid var(--line)', background: 'rgba(255,255,255,0.03)', color: 'var(--text)', outline: 'none' }} value={categoryForm.description} onChange={e => setCategoryForm({...categoryForm, description: e.target.value})} />
+                <textarea rows="3" style={{ width: '100%', padding: '12px 14px', borderRadius: '14px', border: '1px solid var(--line)', background: 'rgba(255,255,255,0.03)', color: 'var(--text)', outline: 'none' }} value={categoryForm.description} onChange={e => { const val = e.target.value; setCategoryForm(prev => ({...prev, description: val})); }} />
               </label>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
                 <button type="button" className="ghost-button" onClick={() => setIsCategoryModalOpen(false)}>Hủy</button>

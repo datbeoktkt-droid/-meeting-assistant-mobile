@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { api, getBaseUrl } from './api';
 
+const moneyFormatter = new Intl.NumberFormat('vi-VN');
+
 function formatMoney(value) {
-  return new Intl.NumberFormat('vi-VN').format(Number(value || 0));
+  return moneyFormatter.format(Number(value || 0));
 }
 
 export default function POSPanel({ token }) {
@@ -153,7 +155,19 @@ export default function POSPanel({ token }) {
 
         <div className="pos-grid">
           {filteredProducts.map(p => (
-            <div className="pos-card" key={p.product_id} onClick={() => addToCart(p)}>
+            <div 
+              className="pos-card" 
+              key={p.product_id} 
+              onClick={() => addToCart(p)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  addToCart(p);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
               <div className="pos-card-img">
                 {p.image_url ? (
                   <img src={p.image_url.startsWith('http') ? p.image_url : `${getBaseUrl()}${p.image_url}`} alt={p.product_name} />
@@ -212,9 +226,9 @@ export default function POSPanel({ token }) {
 
         <div className="pos-checkout">
           <div className="checkout-config">
-            <div className="config-group">
-              <label>Ghi vao ban (Optional)</label>
-              <select value={selectedTableId} onChange={e => setSelectedTableId(e.target.value)}>
+             <div className="config-group">
+              <label htmlFor="pos-table-select">Ghi vao ban (Optional)</label>
+              <select id="pos-table-select" value={selectedTableId} onChange={e => setSelectedTableId(e.target.value)}>
                 <option value="">Khach vang lai</option>
                 {tables.map(t => (
                   <option key={t.table_id} value={t.table_id}>Ban {t.table_number}</option>
@@ -244,8 +258,9 @@ export default function POSPanel({ token }) {
 
             {paymentMethod === 'WALLET' && (
               <div className="config-group">
-                <label>So dien thoai khach</label>
+                <label htmlFor="pos-phone-input">So dien thoai khach</label>
                 <input 
+                  id="pos-phone-input"
                   placeholder="0xxx xxx xxx" 
                   value={userPhone}
                   onChange={e => setUserPhone(e.target.value)}

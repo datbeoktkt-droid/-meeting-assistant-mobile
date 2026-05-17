@@ -1,0 +1,89 @@
+import { describe, expect, it } from "vite-plus/test";
+import type { Diagnostic, ReactDoctorConfig } from "@react-doctor/types";
+import { combineDiagnostics, computeJsxIncludePaths } from "@react-doctor/core";
+
+const createDiagnostic = (overrides: Partial<Diagnostic> = {}): Diagnostic => ({
+  filePath: "src/app.tsx",
+  plugin: "react-doctor",
+  rule: "test-rule",
+  severity: "warning",
+  message: "test message",
+  help: "test help",
+  line: 1,
+  column: 1,
+  category: "Test",
+  ...overrides,
+});
+
+describe("computeJsxIncludePaths", () => {
+  it("returns undefined for empty include paths", () => {
+    expect(computeJsxIncludePaths([])).toBeUndefined();
+  });
+
+  it("filters to only JSX/TSX files", () => {
+    const paths = ["src/app.tsx", "src/utils.ts", "src/Button.jsx", "src/config.js"];
+    const result = computeJsxIncludePaths(paths);
+    expect(result).toEqual(["src/app.tsx", "src/Button.jsx"]);
+  });
+
+  it("returns empty array when no JSX/TSX files exist", () => {
+    const paths = ["src/utils.ts", "src/config.js"];
+    const result = computeJsxIncludePaths(paths);
+    expect(result).toEqual([]);
+  });
+});
+
+describe("combineDiagnostics", () => {
+  it("returns lint diagnostics unchanged in diff mode", () => {
+    const lintDiagnostics = [createDiagnostic({ rule: "lint-rule" })];
+
+    const result = combineDiagnostics({
+      lintDiagnostics,
+      directory: "/tmp",
+      isDiffMode: true,
+      userConfig: null,
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0].rule).toBe("lint-rule");
+  });
+
+  it("returns empty array when input is empty in diff mode", () => {
+    const result = combineDiagnostics({
+      lintDiagnostics: [],
+      directory: "/tmp",
+      isDiffMode: true,
+      userConfig: null,
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("applies config filtering when userConfig is provided", () => {
+    const diagnostics = [
+      createDiagnostic({ plugin: "react", rule: "no-danger" }),
+      createDiagnostic({ plugin: "react-doctor", rule: "no-giant-component" }),
+    ];
+    const config: ReactDoctorConfig = {
+      ignore: { rules: ["react/no-danger"] },
+    };
+
+    const result = combineDiagnostics({
+      lintDiagnostics: diagnostics,
+      directory: "/tmp",
+      isDiffMode: true,
+      userConfig: config,
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0].rule).toBe("no-giant-component");
+  });
+
+  it("skips config filtering when userConfig is null", () => {
+    const diagnostics = [createDiagnostic(), createDiagnostic()];
+    const result = combineDiagnostics({
+      lintDiagnostics: diagnostics,
+      directory: "/tmp",
+      isDiffMode: true,
+      userConfig: null,
+    });
+    expect(result).toHaveLength(2);
+  });
+});

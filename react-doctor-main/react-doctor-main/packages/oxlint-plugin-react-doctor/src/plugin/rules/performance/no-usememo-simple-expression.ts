@@ -1,0 +1,80 @@
+import { defineRule } from "../../utils/define-rule.js";
+import { isHookCall } from "../../utils/is-hook-call.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+import { isNodeOfType } from "../../utils/is-node-of-type.js";
+import type { EsTreeNodeOfType } from "../../utils/es-tree-node-of-type.js";
+
+const isSimpleExpression = (node: EsTreeNode | null): boolean => {
+  if (!node) return false;
+  switch (node.type) {
+    case "Identifier":
+    case "Literal":
+    case "TemplateLiteral":
+      return true;
+    case "BinaryExpression":
+      return isSimpleExpression(node.left) && isSimpleExpression(node.right);
+    case "UnaryExpression":
+      return isSimpleExpression(node.argument);
+    case "MemberExpression":
+      return !node.computed && isSimpleExpression(node.object);
+    case "ConditionalExpression":
+      return (
+        isSimpleExpression(node.test) &&
+        isSimpleExpression(node.consequent) &&
+        isSimpleExpression(node.alternate)
+      );
+    default:
+      return false;
+  }
+};
+
+// Identifiers and member-access chains are technically "simple", but memoizing
+// them is sometimes intentional (stable reference passing). Only flag arithmetic
+// / literal trivial cases to keep false positives low.
+const isTriviallyCheapExpression = (node: EsTreeNode | null): boolean => {
+  if (!node) return false;
+  if (!isSimpleExpression(node)) return false;
+  if (isNodeOfType(node, "Identifier")) return false;
+  if (isNodeOfType(node, "MemberExpression")) return false;
+  return true;
+};
+
+export const noUsememoSimpleExpression = defineRule<Rule>({
+  id: "no-usememo-simple-expression",
+  severity: "warn",
+  recommendation:
+    "Remove useMemo — property access, math, and ternaries are already cheap without memoization",
+  create: (context: RuleContext) => ({
+    CallExpression(node: EsTreeNodeOfType<"CallExpression">) {
+      if (!isHookCall(node, "useMemo")) return;
+
+      const callback = node.arguments?.[0];
+      if (!callback) return;
+      if (
+        !isNodeOfType(callback, "ArrowFunctionExpression") &&
+        !isNodeOfType(callback, "FunctionExpression")
+      )
+        return;
+
+      let returnExpression = null;
+      if (!isNodeOfType(callback.body, "BlockStatement")) {
+        returnExpression = callback.body;
+      } else if (
+        callback.body.body?.length === 1 &&
+        isNodeOfType(callback.body.body[0], "ReturnStatement")
+      ) {
+        returnExpression = callback.body.body[0].argument;
+      }
+
+      if (returnExpression && isTriviallyCheapExpression(returnExpression)) {
+        context.report({
+          node,
+          message:
+            "useMemo wrapping a trivially cheap expression — memo overhead exceeds the computation",
+        });
+      }
+    },
+  }),
+});

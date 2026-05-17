@@ -84,8 +84,10 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+const moneyFormatter = new Intl.NumberFormat('vi-VN');
+
 function formatMoney(value) {
-  return new Intl.NumberFormat('vi-VN').format(Number(value || 0));
+  return moneyFormatter.format(Number(value || 0));
 }
 
 function formatDateTime(value) {
@@ -212,7 +214,7 @@ function buildReceiptHtml(summary, paymentMethod, paymentReceiver) {
 function LoginForm({ onLogin }) {
   const [username, setUsername] = useState('admin_01');
   const [password, setPassword] = useState('hash_password_123');
-  const [baseUrl, setBaseUrl] = useState(getBaseUrl());
+  const [baseUrl, setBaseUrl] = useState(() => getBaseUrl());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -271,7 +273,7 @@ function LoginForm({ onLogin }) {
 }
 
 function App() {
-  const [auth, setAuth] = useState(loadAuth());
+  const [auth, setAuth] = useState(() => loadAuth());
   const [activeTab, setActiveTab] = useState(() => resolveTabFromPathname(window.location.pathname));
   const [message, setMessage] = useState('');
   const [refreshSignal, setRefreshSignal] = useState(0);
@@ -498,7 +500,7 @@ function AdminShell({ auth, activeTab, onChangeTab, onLogout, message, refreshSi
 }
 
 function DashboardPanel({ token }) {
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(() => today());
   const [period, setPeriod] = useState('day');
   const [data, setData] = useState(null);
   const [topProducts, setTopProducts] = useState([]);
@@ -1095,7 +1097,7 @@ function TablesPanel({ token }) {
 }
 
 function KitchenPanel({ token, refreshSignal }) {
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(() => today());
   const [status, setStatus] = useState('');
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1260,7 +1262,7 @@ function KitchenPanel({ token, refreshSignal }) {
 }
 
 function BookingsPanel({ token }) {
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(() => today());
   const [status, setStatus] = useState('');
   const [bookings, setBookings] = useState([]);
   const [error, setError] = useState('');
